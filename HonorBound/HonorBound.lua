@@ -1,10 +1,16 @@
 -- HonorBound: a community crest for players sworn to RP-PvP.
 --
 -- The oath. Each character swears once. A sworn character stays flagged for
--- PvP: once flagged, /pvp is replaced and "Disable" in the portrait menu is
--- greyed out (Blizzard won't let addons set the flag, only stop you clearing
--- it). If something unflags you anyway, you get GRACE seconds to reflag
+-- PvP: "Disable" in the portrait menu is greyed out, and if anything unflags
+-- you (typing /pvp, entering a dungeon) you get GRACE seconds to reflag
 -- before the oath breaks. A broken oath can be sworn again with /honor swear.
+--
+-- Reflagging. Blizzard won't let addons set the flag; only your own click or
+-- keypress can. So while a sworn player is unflagged, the addon borrows their
+-- action bar keys: the next press runs /pvp and then the ability on that key,
+-- and the keys go back at once. /pvp is left alone, because a replaced /pvp
+-- can't flag you either. Dungeons and raids pause the countdown (you can't
+-- reflag inside), and it restarts when you leave.
 --
 -- The badge. Your crest shows only while you're sworn and flagged. Other
 -- players' crests need both their sworn broadcast and the server's live flag
@@ -17,6 +23,7 @@ local announceRetryAt = 0
 local peers, queries, widgets, plates = {}, {}, {}, {}
 local lastQuery, lastAnswer, lastJoin, lastMinute = -100, -100, -100, 0
 local guarded, deadline, prompt, promptAfterCombat
+local REFLAG_POPUP_DELAY = 30    -- seconds the borrowed keys get before the popup shows too
 local Refresh, Announce, UpdatePrompt, RefreshPlate
 
 local function Print(text)
@@ -828,19 +835,113 @@ local function GreyOutDisable()
     UnitPopupPvpDisableButtonMixin.IsEnabled = function() return false end
     return true
 end
--- Removes the ways to unflag. Only call while flagged: afterwards /pvp
--- can't flag you either until /reload.
+-- Greys out "Disable" in the portrait menu. /pvp is left alone: replacing it
+-- would stop it flagging you too, and the reflag keys rely on it. Typing /pvp
+-- to unflag just starts the grace countdown like any other unflag.
 local function Guard()
     if guarded then return end
     guarded = true
-    SlashCmdList.PVP = function()
-        if Desired() then
-            Print("You're sworn to RP-PvP; unflagging is disabled.")
-        else
-            Print("To flag, right-click your portrait and choose PvP > Enable.")
+    if not GreyOutDisable() then eventFrame:RegisterEvent("ADDON_LOADED") end
+end
+
+---------------------------------------------------------------------------
+-- Reflag on your next keypress. While you're sworn and unflagged outside an
+-- instance, your action bar keys are overridden by a secure button whose
+-- macro is "/pvp" followed by "/click <the button that key normally presses>",
+-- so the press flags you and still uses the ability. The override is lifted
+-- after one press, as soon as you're flagged, and just before combat (key
+-- bindings can't change during combat, and /pvp toggles: a press while
+-- already flagged would unflag you).
+
+local BAR_BINDINGS = {
+    {"ACTIONBUTTON", "ActionButton"},
+    {"MULTIACTIONBAR1BUTTON", "MultiBarBottomLeftButton"},
+    {"MULTIACTIONBAR2BUTTON", "MultiBarBottomRightButton"},
+    {"MULTIACTIONBAR3BUTTON", "MultiBarRightButton"},
+    {"MULTIACTIONBAR4BUTTON", "MultiBarLeftButton"},
+}
+-- Keys checked for bar addons (Bartender, Dominos...), which bind keys to
+-- their own buttons as "CLICK <button>:<mouse button>".
+local COMMON_KEYS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="}
+local reflagButton, reflagArmed, reflagArmedAt, reflagNotified
+local reflagPressedAt = -100
+
+local function InPausedInstance()
+    if not IsInInstance then return false end
+    local inside, kind = IsInInstance()
+    return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
+end
+local function CreateReflagButton()
+    local button = CreateFrame("Button", "HonorBoundReflagButton", UIParent, "SecureActionButtonTemplate")
+    button:RegisterForClicks("AnyUp")
+    button:SetAttribute("useOnKeyDown", false)
+    button:SetAttribute("type", "macro")
+    button:HookScript("PostClick", function()
+        Debug("Reflag key pressed.")
+        reflagArmed, reflagPressedAt = false, GetTime()
+        if not InCombatLockdown() and ClearOverrideBindings then ClearOverrideBindings(button) end
+    end)
+    return button
+end
+-- Each borrowed key -> the macro line that presses what the key normally does.
+local function ReflagTargets()
+    local targets, seen = {}, {}
+    local function add(key, line)
+        if key and not seen[key] then seen[key] = true targets[#targets + 1] = {key = key, line = line} end
+    end
+    -- Buttons that act on key down need "/click ... LeftButton 1" to fire.
+    local down = GetCVarBool and GetCVarBool("ActionButtonUseKeyDown") and " 1" or ""
+    if GetBindingKey then
+        for _, bar in ipairs(BAR_BINDINGS) do
+            for i = 1, 12 do
+                local name = bar[2] .. i
+                if _G[name] then
+                    for _, key in ipairs({GetBindingKey(bar[1] .. i)}) do
+                        add(key, "/click " .. name .. " LeftButton" .. down)
+                    end
+                end
+            end
         end
     end
-    if not GreyOutDisable() then eventFrame:RegisterEvent("ADDON_LOADED") end
+    if GetBindingAction then
+        for _, base in ipairs(COMMON_KEYS) do
+            for _, key in ipairs({base, "SHIFT-" .. base, "CTRL-" .. base, "ALT-" .. base}) do
+                local action = GetBindingAction(key, true)
+                local name, mouse
+                if type(action) == "string" then name, mouse = action:match("^CLICK ([^:]+):(.+)$") end
+                if name and name ~= "HonorBoundReflagButton" and _G[name] then
+                    add(key, ("/click %s %s%s"):format(name, mouse, down))
+                end
+            end
+        end
+    end
+    return targets
+end
+-- Returns whether keys are borrowed now.
+local function ArmReflag()
+    if reflagArmed then return true end
+    -- Just pressed: the flag may not have registered yet, and /pvp toggles.
+    -- Count as armed, without keys, until it has had time to.
+    if GetTime() - reflagPressedAt < 3 then return true end
+    if not SetOverrideBindingClick or InCombatLockdown() or db.autoReflag == false then return false end
+    reflagButton = reflagButton or CreateReflagButton()
+    local targets = ReflagTargets()
+    if #targets == 0 then return false end
+    ClearOverrideBindings(reflagButton)
+    for i, target in ipairs(targets) do
+        reflagButton:SetAttribute("*macrotext-key" .. i, (SLASH_PVP1 or "/pvp") .. "\n" .. target.line)
+        SetOverrideBindingClick(reflagButton, true, target.key, "HonorBoundReflagButton", "key" .. i)
+    end
+    reflagArmed = true
+    reflagArmedAt = reflagArmedAt or GetTime()
+    Debug(("Reflag armed on %d keys."):format(#targets))
+    return true
+end
+local function DisarmReflag()
+    if not reflagArmed or InCombatLockdown() then return end
+    ClearOverrideBindings(reflagButton)
+    reflagArmed = false
+    Debug("Reflag keys released.")
 end
 local function Swear()
     A.StartPledge(char, UnitLevel("player"))
@@ -857,7 +958,6 @@ local function Break(reason)
     char.sworn, char.joining, char.graceLeft = false, nil, nil
     deadline = nil
     Print("Oath broken (" .. reason .. "). Your crest is gone. Type /honor swear to take it again.")
-    if guarded then Print("Unflagging stays blocked until you /reload.") end
     Announce(true)
     Refresh()
 end
@@ -976,6 +1076,8 @@ UpdatePrompt = function()
     prompt.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
     if Desired() then
         deadline, char.graceLeft = nil, nil
+        reflagArmedAt, reflagNotified = nil, nil
+        DisarmReflag()
         if char.sworn then
             Guard()
             SetPromptShown(false)
@@ -1000,6 +1102,13 @@ UpdatePrompt = function()
         SetPromptShown(false)
         return
     end
+    if char.sworn and InPausedInstance() then
+        -- You can't reflag inside; the countdown starts fresh outside.
+        deadline, char.graceLeft, reflagArmedAt = nil, nil, nil
+        DisarmReflag()
+        SetPromptShown(false)
+        return
+    end
     local left
     if char.sworn then
         if IsPVPTimerRunning() then
@@ -1010,15 +1119,22 @@ UpdatePrompt = function()
             deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
             left = deadline - GetTime()
         end
-        if left <= 0 then Break("unflagged") SetPromptShown(false) return end
+        if left <= 0 then Break("unflagged") DisarmReflag() SetPromptShown(false) return end
+        -- Try the borrowed keys first; the popup follows if they go unused.
+        if ArmReflag() then
+            if not reflagNotified then
+                reflagNotified = true
+                Print("You're unflagged. Your next action bar key will flag you again.")
+            end
+            if GetTime() - reflagArmedAt < REFLAG_POPUP_DELAY then
+                SetPromptShown(false)
+                return
+            end
+        end
     end
-    if guarded then
-        -- /pvp is replaced now, so the secure button can't flag you.
-        prompt.text:SetText("Something unflagged you. Right-click your portrait and choose PvP > Enable within "
-            .. FormatTime(left or 0) .. " to keep your oath.")
-        SetFlagButton(false)
-    elseif char.sworn then
-        prompt.text:SetText("You're unflagged. Flag again within " .. FormatTime(left) .. " or your oath breaks and your crest goes.")
+    if char.sworn then
+        prompt.text:SetText("You're unflagged. Press an action bar key or click below within "
+            .. FormatTime(left) .. ", or your oath breaks and your crest goes.")
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
     else
@@ -1347,7 +1463,6 @@ SlashCmdList.HONORBOUND = function(input)
             Swear()
         else
             char.declined, char.joining = nil, true
-            if guarded then Print("Right-click your portrait and choose PvP > Enable to complete your oath.") end
         end
         UpdatePrompt()
     elseif command == "renounce" then
@@ -1357,6 +1472,12 @@ SlashCmdList.HONORBOUND = function(input)
             Break("renounced")
             char.declined = true
         end
+    elseif command == "autoflag" then
+        if arg == "on" then db.autoReflag = true
+        elseif arg == "off" then db.autoReflag = false DisarmReflag() end
+        Print("Reflag on your next action key: " .. (db.autoReflag == false and "off" or "on")
+            .. ". /honor autoflag on|off")
+        UpdatePrompt()
     elseif command == "plates" then
         db.plates = not db.plates
         Print("Nameplate crests " .. (db.plates and "on" or "off") .. ".")
@@ -1375,7 +1496,7 @@ SlashCmdList.HONORBOUND = function(input)
     elseif command == "" or command == "status" then
         PrintStatus()
     else
-        Print("/honor · /honor swear · /honor renounce · /honor plates · /honor scale 1 · /honor offset 0 0 · /honor reset")
+        Print("/honor · /honor swear · /honor renounce · /honor autoflag · /honor plates · /honor scale 1 · /honor offset 0 0 · /honor reset")
     end
     Refresh()
 end
@@ -1384,7 +1505,7 @@ end
 -- and a /reload can land you in combat before PLAYER_LOGIN.
 prompt = CreatePrompt()
 
-for _, event in ipairs({"PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT"}) do
+for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT"}) do
     eventFrame:RegisterEvent(event)
 end
 -- Speakers we might not know yet. Group and guild chat are covered by
@@ -1459,13 +1580,16 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         local crest = PlateCrest(unit)
         if crest then crest:Hide() end
         plates[unit] = nil
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        -- Fires just before combat lockdown, the last moment bindings can change.
+        DisarmReflag()
     elseif event == "PLAYER_REGEN_ENABLED" then
-        self:UnregisterEvent("PLAYER_REGEN_ENABLED")
-        if promptAfterCombat then promptAfterCombat = nil UpdatePrompt() end
+        promptAfterCombat = nil
+        UpdatePrompt()
     elseif event == "ADDON_LOADED" then
         if GreyOutDisable() then self:UnregisterEvent("ADDON_LOADED") end
     else
-        if event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FACTION" then UpdatePrompt() end
+        if event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FACTION" or event == "PLAYER_ENTERING_WORLD" then UpdatePrompt() end
         if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_FLAGS_CHANGED" then Announce(true) end
         Refresh()
     end

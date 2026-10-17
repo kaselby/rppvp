@@ -89,6 +89,7 @@ UnitPopupPvpDisableButtonMixin = { IsEnabled = function() return true end }
 debugLines = {}
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) debugLines[#debugLines + 1] = text end }
 SlashCmdList = { PVP = function() desired = not desired end }
+local blizzardPvp = SlashCmdList.PVP
 LE_PARTY_CATEGORY_INSTANCE = 2
 function GetTime() return now end
 function UnitLevel() return 20 end
@@ -165,8 +166,7 @@ check(playerBadge().shown and playerBadge().crest.texturePath:find("CrestHorde")
 check(PlayerPVPIcon.alpha == 0, "crest replaces own PvP icon")
 check(lastSent():find("|1|"), "sworn status broadcast immediately")
 check(not UnitPopupPvpDisableButtonMixin.IsEnabled(), "portrait menu Disable greyed out")
-SlashCmdList.PVP()
-check(desired, "/pvp can no longer unflag")
+check(SlashCmdList.PVP == blizzardPvp, "/pvp is left alone, so it can still flag you")
 
 -- Peers: sworn claim plus the server's live flag.
 peer(true)
@@ -636,4 +636,69 @@ check(refused <= 8, "refused status updates back off (" .. refused .. " in 70 s)
 check(#debugLines > 8, "verbose debug produced output (" .. #debugLines .. " lines)")
 if os.getenv("SHOW_DEBUG") then for _, line in ipairs(debugLines) do print((line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))) end end
 SlashCmdList.HONORBOUND("debug off")
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation and readable debug.")
+-- Reflag on the next keypress, and dungeons pause the countdown.
+local overrides, instance = {}, false
+function GetBindingKey(command)
+    if command == "ACTIONBUTTON1" then return "1" end
+    if command == "ACTIONBUTTON2" then return "2", "SHIFT-Q" end
+end
+function GetBindingAction(key) return key == "3" and "CLICK BT4Button3:LeftButton" or "" end
+function SetOverrideBindingClick(_, _, key, name, button) overrides[key] = {name = name, button = button} end
+function ClearOverrideBindings() for key in pairs(overrides) do overrides[key] = nil end end
+function IsInInstance() return instance, instance and "party" or "none" end
+function GetCVarBool(name) return name == "ActionButtonUseKeyDown" end
+ActionButton1, ActionButton2, BT4Button3 = object("ActionButton1"), object("ActionButton2"), object("BT4Button3")
+local function borrowed() local n = 0 for _ in pairs(overrides) do n = n + 1 end return n end
+local function macroFor(key) return HonorBoundReflagButton.attributes["*macrotext-" .. overrides[key].button] end
+local function setFlag(on) desired, units.player.flagged = on, on event("PLAYER_FLAGS_CHANGED", "player") end
+
+setFlag(true)
+SlashCmdList.HONORBOUND("swear")
+check(HonorBoundCharDB.sworn, "sworn again for the reflag checks")
+instance = true
+event("PLAYER_ENTERING_WORLD")
+setFlag(false)
+check(borrowed() == 0 and not prompt.shown, "inside a dungeon: no borrowed keys, no popup")
+advance(A.GRACE + 30)
+check(HonorBoundCharDB.sworn, "dungeon time doesn't run the countdown down")
+instance = false
+event("PLAYER_ENTERING_WORLD")
+check(borrowed() == 4 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
+check(not prompt.shown, "no popup while the keys are borrowed")
+check(macroFor("1") == "/pvp\n/click ActionButton1 LeftButton 1", "key 1 flags, then presses its own button: " .. tostring(macroFor("1")))
+check(macroFor("SHIFT-Q") == "/pvp\n/click ActionButton2 LeftButton 1", "second binding of a bar button")
+check(macroFor("3") == "/pvp\n/click BT4Button3 LeftButton 1", "bar addon button through its CLICK binding")
+event("PLAYER_REGEN_DISABLED")
+combat = true
+advance(2)
+check(borrowed() == 0, "keys handed back before combat")
+combat = false
+event("PLAYER_REGEN_ENABLED")
+check(borrowed() == 4, "borrowed again after combat")
+-- The press: the macro's /pvp flags you; the keys go back straight away.
+HonorBoundReflagButton.scripts.PostClick(HonorBoundReflagButton)
+blizzardPvp()
+check(borrowed() == 0, "keys handed back after one press")
+advance(1)
+check(borrowed() == 0, "not borrowed again while the flag registers")
+units.player.flagged = true
+event("PLAYER_FLAGS_CHANGED", "player")
+advance(5)
+check(borrowed() == 0 and HonorBoundCharDB.sworn and not prompt.shown, "reflagged by the keypress, oath kept")
+-- Keys unused: the popup follows.
+setFlag(false)
+check(borrowed() == 4 and not prompt.shown, "unflagged again: keys borrowed")
+advance(31)
+check(prompt.shown and prompt.flag.text == "Stay flagged" and borrowed() == 4, "popup after 30 s, keys still borrowed")
+setFlag(true)
+check(borrowed() == 0 and not prompt.shown, "flagging any other way hands the keys back")
+-- Turned off: straight to the popup.
+SlashCmdList.HONORBOUND("autoflag off")
+setFlag(false)
+check(borrowed() == 0 and prompt.shown, "autoflag off: popup, no borrowed keys")
+SlashCmdList.HONORBOUND("autoflag on")
+check(borrowed() == 4, "autoflag on borrows the keys")
+setFlag(true)
+check(borrowed() == 0, "and hands them back once flagged")
+
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug and reflag keys.")

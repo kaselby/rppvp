@@ -20,10 +20,15 @@ or you'll get two sets of flag prompts.
 - On a character's first login you're offered the oath. Already flagged?
   Click **Swear the oath**. Not flagged? **Flag and swear** flags you
   (Blizzard only lets a real click change the flag) and swears you in.
-- Once sworn and flagged, `/pvp` can't unflag you and **Disable** in the
-  portrait PvP menu is greyed out.
-- If something unflags you anyway, you get 5 minutes to reflag, using the
-  portrait menu: PvP > Enable. The countdown carries over if you log out.
+- Once sworn and flagged, **Disable** in the portrait PvP menu is greyed out.
+- If anything unflags you (typing `/pvp`, entering a dungeon), you get 5
+  minutes to reflag. The countdown carries over if you log out, and it pauses
+  inside dungeons and raids, where you can't reflag; it starts fresh when you
+  leave.
+- Reflagging takes no clicking: while you're unflagged, your next action bar
+  key flags you and still uses its ability. If you don't press one within 30
+  seconds, a popup with a flag button appears too. `/honor autoflag off`
+  turns the key off and goes straight to the popup.
   When it runs out, the oath breaks and your crest disappears. `/honor swear`
   takes it again.
 - `/honor renounce confirm` gives the oath up voluntarily.
@@ -46,6 +51,7 @@ An unflagged player never shows a crest, whatever their addon claims.
 - `/honor`: oath status, flag, sworn players heard from, channel status.
 - `/honor swear`: take the oath on this character.
 - `/honor renounce confirm`: give up the oath.
+- `/honor autoflag on|off`: reflag on your next action bar key (on by default).
 - `/honor plates`: toggle crests on nameplates.
 - `/honor chat on|off`: toggle crests in chat.
 - `/honor debug on|verbose|off`: discovery diagnostics for this session.
