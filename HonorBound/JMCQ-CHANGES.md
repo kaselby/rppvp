@@ -92,3 +92,13 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   once marked no-addon.
 - Coverage line (every minute, every 15 s while simulating): nameplates by
   state and average seen-to-probe / seen-to-answer / seen-to-no-addon times.
+
+# 0.3.2: readable debug output
+
+- Debug lines are plain sentences with the clock time, player names instead
+  of IDs, "the realm channel"/"your guild" instead of route codes, and a
+  coloured first word: Sent, Heard, Couldn't send (with the reason in words).
+- Summary and coverage lines rewritten as sentences with correct plurals;
+  share counts only include sends that went through.
+- Fixed: when the channel refused a status update it was retried every
+  second; it now waits 10 s.

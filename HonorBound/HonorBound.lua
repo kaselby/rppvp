@@ -13,6 +13,7 @@ local _, A = ...
 local MEDIA = "Interface\\AddOns\\HonorBound\\Media\\"
 local eventFrame = CreateFrame("Frame")
 local db, char, myGUID, myServer, lastAnnounce, lastPayload, lastPledgePayload
+local announceRetryAt = 0
 local peers, queries, widgets, plates = {}, {}, {}, {}
 local lastQuery, lastAnswer, lastJoin, lastMinute = -100, -100, -100, 0
 local guarded, deadline, prompt, promptAfterCombat
@@ -27,9 +28,47 @@ end
 local debugEnabled, debugVerbose = false, false
 local function Debug(text, verbose)
     if debugEnabled and (debugVerbose or not verbose) then
-        Print(("[debug %.0fs] "):format(GetTime()) .. text)
+        local clock = date and date("%H:%M:%S") or ("%.0fs"):format(GetTime())
+        DEFAULT_CHAT_FRAME:AddMessage("|cff9d9d9dHonorBound " .. clock .. "|r  " .. text)
     end
 end
+-- Coloured first word so a line reads at a glance.
+local SENT, HEARD, FAILED = "|cffffd100Sent|r", "|cff55ff55Heard|r", "|cffff5555Couldn't send|r"
+local ROUTES = {CHANNEL = "the realm channel", GUILD = "your guild", PARTY = "your party",
+    RAID = "your raid", INSTANCE_CHAT = "your instance group", WHISPER = "a whisper",
+    YELL = "a yell", SAY = "say"}
+-- Plain reasons for the game's addon-message result codes.
+local REASONS = {InvalidPrefix = "the addon's message name isn't registered",
+    InvalidMessage = "the message was rejected", AddonMessageThrottle = "sending too fast, the game is throttling us",
+    InvalidChatType = "that kind of message isn't allowed here", NotInGroup = "you're not in a group",
+    TargetRequired = "no target was given", InvalidChannel = "you're not in that channel",
+    ChannelThrottle = "the channel is busy, the game is throttling us", GeneralError = "the game refused it",
+    NotInGuild = "you're not in a guild", AddOnMessageLockdown = "addon messages are blocked during encounters",
+    TargetOffline = "that player is offline"}
+-- Codes from Enum.SendAddonMessageResult, for clients that don't expose it.
+local CODE_NAMES = {[1] = "InvalidPrefix", [2] = "InvalidMessage", [3] = "AddonMessageThrottle",
+    [4] = "InvalidChatType", [5] = "NotInGroup", [6] = "TargetRequired", [7] = "InvalidChannel",
+    [8] = "ChannelThrottle", [9] = "GeneralError", [11] = "AddOnMessageLockdown"}
+local function Reason(result)
+    local codes = Enum and Enum.SendAddonMessageResult
+    if type(codes) == "table" then
+        for name, code in pairs(codes) do
+            if code == result then return REASONS[name] or name end
+        end
+    end
+    local name = CODE_NAMES[result]
+    return name and REASONS[name] or ("the game refused it (code " .. tostring(result) .. ")")
+end
+-- "1 player", "2 players".
+local function Count(n, word, plural)
+    return n .. " " .. (n == 1 and word or (plural or word .. "s"))
+end
+local function StatusWords(sworn, level)
+    if not sworn then return "not sworn" end
+    return level and level > 0 and ("sworn since level " .. level) or "sworn"
+end
+-- Names and message descriptions need the discovery tables, defined below.
+local Who, Describe
 local function Secret(value)
     return issecretvalue and issecretvalue(value)
 end
@@ -105,10 +144,13 @@ local function Send(message, route, target)
     if not (result == true or result == 0) then tokens = math.min(tokens, -2) end
     if debugEnabled then
         local ok = result == true or result == 0
-        -- Failed whispers always show; accepted ones only in verbose.
-        Debug("TX " .. route .. (target and ("/" .. target) or "") .. " " .. message
-            .. " -> " .. (ok and "accepted" or "FAILED") .. " (API result " .. tostring(result) .. ")",
-            ok and route == "WHISPER")
+        local where = route == "WHISPER" and ("a whisper to " .. tostring(target)) or ROUTES[route] or route
+        -- Failures always show; every successful send only in verbose.
+        if ok then
+            Debug(SENT .. " " .. Describe(message) .. " via " .. where .. ".", true)
+        else
+            Debug(FAILED .. " " .. Describe(message) .. " via " .. where .. ": " .. Reason(result) .. ".")
+        end
     end
     return result == true or result == 0
 end
@@ -132,26 +174,29 @@ Announce = function(force)
     -- but let a changed oath through straight away.
     if unchanged and lastAnnounce and now - lastAnnounce < 3 then return end
     if not force and unchanged and lastAnnounce and now - lastAnnounce < 60 then return end
-    Debug("Broadcast attempt; pledged=" .. tostring(Sworn() and true or false))
-    local sent = false
+    -- Nothing got through last time: wait before trying again, rather than
+    -- hammering a busy channel every second.
+    if now < announceRetryAt then return end
+    local reached = {}
+    local function To(route, target)
+        if Send(payload, route, target) and Send(pledgePayload, route, target) then
+            reached[#reached + 1] = ROUTES[route]
+        end
+    end
     local channel = ChannelID()
-    if channel then
-        local statusSent = Send(payload, "CHANNEL", tostring(channel))
-        local pledgeSent = Send(pledgePayload, "CHANNEL", tostring(channel))
-        sent = (statusSent and pledgeSent) or sent
+    if channel then To("CHANNEL", tostring(channel)) end
+    if GroupRoute() then To(GroupRoute()) end
+    if IsInGuild() then To("GUILD") end
+    local mine = StatusWords(Sworn(), Sworn() and A.PledgeLevel(char))
+    if #reached > 0 then
+        lastAnnounce, lastPayload, lastPledgePayload = now, payload, pledgePayload
+        Debug(SENT .. " your status (" .. mine .. ") to " .. table.concat(reached, ", ") .. ".")
+    elseif channel or GroupRoute() or IsInGuild() then
+        -- Sends were refused: back off. With nowhere to send yet, nothing is
+        -- sent either, so keep checking every second.
+        announceRetryAt = now + 10
+        Debug("Couldn't announce your status (" .. mine .. "). Trying again in 10 s.")
     end
-    local route = GroupRoute()
-    if route then
-        local statusSent = Send(payload, route)
-        local pledgeSent = Send(pledgePayload, route)
-        sent = (statusSent and pledgeSent) or sent
-    end
-    if IsInGuild() then
-        local statusSent = Send(payload, "GUILD")
-        local pledgeSent = Send(pledgePayload, "GUILD")
-        sent = (statusSent and pledgeSent) or sent
-    end
-    if sent then lastAnnounce, lastPayload, lastPledgePayload = now, payload, pledgePayload end
 end
 local function JoinChannel()
     if not db or GetTime() - lastJoin < 30 then return end
@@ -264,6 +309,42 @@ end
 local function ValidName(name)
     return type(name) == "string" and #name <= 64 and name:match("^[^%-|]+%-[^%-|]+$") ~= nil
 end
+-- A player's name for debug lines, falling back to a short ID.
+Who = function(guid)
+    if not guid then return "someone" end
+    if guid == myGUID then return "you" end
+    return names[guid] or GuidName(guid) or (likely[guid] and likely[guid].name)
+        or ("player " .. (guid:match("^Player%-(.+)$") or guid))
+end
+-- What an addon message says, in words.
+Describe = function(message)
+    local kind = message:match("^(%u+)|")
+    if kind == "S" then
+        local guid, sworn = message:match("^S|2|([^|]+)|([01])|")
+        return (guid == myGUID and "your" or (Who(guid) .. "'s")) .. " status (" .. StatusWords(sworn == "1") .. ")"
+    elseif kind == "P" then
+        local guid, level = message:match("^P|1|([^|]+)|(%d+)|")
+        return (guid == myGUID and "your" or (Who(guid) .. "'s")) .. " pledge level ("
+            .. (level and level ~= "0" and ("since level " .. level) or "none") .. ")"
+    elseif kind == "Q" then
+        return "a question: does " .. Who(message:match("^Q|1|(.+)$")) .. " have the addon?"
+    elseif kind == "WQ" then
+        return "a probe (do you have the addon? here's my status)"
+    elseif kind == "WR" then
+        return "a reply (yes, I have the addon, here's my status)"
+    elseif kind == "F" then
+        local _, name = message:match("^F|1|([^|]+)|([^|]+)|")
+        return "a find: " .. tostring(name) .. " has the addon"
+    elseif kind == "FS" then
+        local _, name = message:match("^FS|1|([^|]+)|([^|]+)|")
+        return "a simulated find: " .. tostring(name)
+    elseif kind == "N" then
+        local list = message:match("^N|1|(.*)$") or ""
+        local _, commas = list:gsub(",", "")
+        return "a list of " .. Count(commas + 1, "player") .. " without the addon"
+    end
+    return "a message (" .. message .. ")"
+end
 local function DecodeStatus(sworn, raw, version)
     local level = tonumber(raw)
     if not level or level > 60 then return end
@@ -296,6 +377,7 @@ local function SimAnswer(guid, name)
     local now = GetTime()
     stats.answered = stats.answered + 1
     peers[guid] = {sworn = true, version = "sim", simulated = true, seen = now}
+    Debug(HEARD .. " a simulated answer from " .. (name or Who(guid)) .. ".", true)
     TimeResult("answer", guid)
     -- Tell other testers on our realm (FS: ignored by everyone not simulating).
     if OtherRealm(guid) and ValidName(name) and not shares[guid] then
@@ -408,7 +490,7 @@ local function PumpWhispers(now)
         if now - p.at > PROBE_TIMEOUT then
             pending[guid] = nil
             MarkNoAddon(guid, "silent")
-            Debug("Probe " .. p.name .. ": no reply", true)
+            Debug("No answer from " .. p.name .. " after " .. PROBE_TIMEOUT .. " s: marked as not having the addon for 2 hours.", true)
         end
     end
     while replies[1] and now - replies[1].at > PROBE_STALE do table.remove(replies, 1) end
@@ -454,8 +536,13 @@ local function PumpShares(now)
         if now >= s.due then
             shares[guid] = nil
             heard[guid] = {at = now, sworn = s.peer.sworn, level = s.peer.pledgedSinceLevel or 0}
-            stats.sharedF = stats.sharedF + 1
-            if not Send(s.payload, "CHANNEL", tostring(id)) then sharingPausedUntil = now + 120 end
+            if Send(s.payload, "CHANNEL", tostring(id)) then
+                stats.sharedF = stats.sharedF + 1
+                Debug(SENT .. " to your realm: " .. Describe(s.payload):gsub("^a ", "") .. ".")
+            else
+                sharingPausedUntil = now + 120
+                Debug("Sharing paused for 2 minutes while the channel is busy.")
+            end
             return
         end
     end
@@ -465,9 +552,12 @@ local function PumpShares(now)
         batch[#batch + 1] = table.remove(unsharedNo, 1):sub(8) -- drop "Player-"
     end
     nextNoPost = now + Between(NO_GAP)
-    stats.sharedN = stats.sharedN + 1
-    if not Send("N|1|" .. table.concat(batch, ","), "CHANNEL", tostring(id)) then
+    if Send("N|1|" .. table.concat(batch, ","), "CHANNEL", tostring(id)) then
+        stats.sharedN = stats.sharedN + 1
+        Debug(SENT .. " to your realm: " .. Count(#batch, "player") .. " without the addon.")
+    else
         sharingPausedUntil = now + 120
+        Debug("Sharing paused for 2 minutes while the channel is busy.")
     end
 end
 local function PumpProbes()
@@ -476,6 +566,7 @@ local function PumpProbes()
         if now - at > ASK_TIMEOUT then
             asking[guid] = nil
             MarkNoAddon(guid, "askedSilent")
+            Debug(Who(guid) .. " (your realm) didn't answer within " .. ASK_TIMEOUT .. " s: marked as not having the addon.", true)
         end
     end
     if Locked() or not myGUID then return end
@@ -490,7 +581,8 @@ local function OnWhisper(message, sender)
     -- The status claims a GUID; it must belong to whoever sent it.
     local known = GuidName(guid)
     if known and known:match("^[^%-]+") ~= sender:match("^[^%-]+") then return end
-    Debug("RX WHISPER/" .. sender .. " " .. message, true)
+    Debug(HEARD .. " " .. (kind == "Q" and "a probe from " or "a reply from ") .. sender .. ": they have the addon ("
+        .. StatusWords(peer.sworn, peer.pledgedSinceLevel) .. ")" .. (kind == "Q" and ", and now know about you." or "."), true)
     local now = GetTime()
     peers[guid] = A.MergePledgePeer(peers[guid], peer, now, true)
     noAddon[guid] = nil
@@ -520,6 +612,7 @@ local function OnShare(message)
         if not peer then return true end
         local now = GetTime()
         stats.heardF = stats.heardF + 1
+        Debug(HEARD .. " from your realm: " .. name .. " has the addon (" .. StatusWords(peer.sworn, peer.pledgedSinceLevel) .. ").")
         heard[guid] = {at = now, sworn = peer.sworn, level = peer.pledgedSinceLevel or 0}
         -- Someone beat us to it: drop our own copy if it says the same thing.
         if shares[guid] and SameStatus(heard[guid], shares[guid].peer) then shares[guid] = nil end
@@ -538,6 +631,8 @@ local function OnShare(message)
     local list = message:match("^N|1|([%x%-,]+)$")
     if not list then return end
     stats.heardN = stats.heardN + 1
+    local _, commas = list:gsub(",", "")
+    Debug(HEARD .. " from your realm: " .. Count(commas + 1, "player") .. " without the addon.")
     local expires = time() + NO_ADDON_SHARED
     local now = GetTime()
     local seen = {}
@@ -570,6 +665,7 @@ local function OnSimShare(message)
     heard[guid] = {at = now, sworn = true, level = 0}
     shares[guid] = nil
     local current = peers[guid]
+    Debug(HEARD .. " from another tester: " .. name .. " (simulated).")
     if not (current and now - current.seen < A.TTL) then
         peers[guid] = {sworn = true, version = "sim", simulated = true, relayed = true, seen = now}
         TimeResult("answer", guid)
@@ -586,7 +682,7 @@ local function HideUnreachable(_, _, message)
         if message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(p.name) then
             pending[guid] = nil
             MarkNoAddon(guid, "unreachable")
-            Debug("Probe " .. p.name .. ": unreachable", true)
+            Debug(p.name .. " can't be whispered (offline, or out of reach): marked as not having the addon.", true)
             return true
         end
     end
@@ -650,18 +746,32 @@ local function Coverage()
             else other = other + 1 end
         end
     end
-    local function avg(t) return t[2] > 0 and (math.floor(t[1] / t[2] + 0.5) .. "s") or "-" end
-    return ("Plates %d: addon %d, no addon %d, waiting %d, queued %d, not asked %d | seen→probe avg %s, seen→answer avg %s, seen→no-addon avg %s%s")
-        :format(total, addon, none, asked, queued, other, avg(timings.probe), avg(timings.answer),
-            avg(timings.none), simPercent and (" | sim " .. simPercent .. "%") or "")
+    local function avg(t) return t[2] > 0 and (math.floor(t[1] / t[2] + 0.5) .. " s") or "n/a" end
+    return ("%s on screen: %d have the addon, %d don't, %d being asked, %d waiting in line, %d not asked.%s"
+        .. " On average after first seeing someone: asked in %s, answered in %s, ruled out in %s.")
+        :format(Count(total, "player"), addon, none, asked, queued, other,
+            simPercent and (" (Simulating " .. simPercent .. "% addon users.)") or "",
+            avg(timings.probe), avg(timings.answer), avg(timings.none))
 end
 -- One line a minute instead of a line per stranger.
 local function DebugSummary()
     if simPercent or next(plates) then Debug(Coverage()) end
     if stats.asked + stats.probed + stats.sharedF + stats.sharedN + stats.heardF + stats.heardN == 0 then return end
-    Debug(("Last minute: asked %d on realm (%d silent); probed %d, answered %d, no reply %d, unreachable %d; shared %d finds, %d no-addon lists; heard %d finds, %d lists; queued %d")
-        :format(stats.asked, stats.askedSilent, stats.probed, stats.answered, stats.silent, stats.unreachable,
-            stats.sharedF, stats.sharedN, stats.heardF, stats.heardN, probeCount))
+    local parts = {}
+    local function add(count, text, ...)
+        if count > 0 then parts[#parts + 1] = text:format(Count(count, ...)) end
+    end
+    add(stats.asked, "asked %s on your realm" .. (stats.askedSilent > 0 and (" (" .. stats.askedSilent .. " silent)") or ""), "player")
+    add(stats.probed, "probed %s on other realms", "player")
+    add(stats.answered, "got %s", "answer")
+    add(stats.silent, "%s went unanswered", "probe")
+    add(stats.unreachable, "%s couldn't be whispered", "player")
+    add(stats.sharedF, "shared %s", "find")
+    add(stats.sharedN, "shared %s", "no-addon list")
+    add(stats.heardF, "heard %s from your realm", "find")
+    add(stats.heardN, "heard %s", "no-addon list")
+    add(probeCount, "%s still waiting in line", "player")
+    Debug("Since the last summary: " .. table.concat(parts, ", ") .. ".")
     for key in pairs(stats) do stats[key] = 0 end
 end
 -- Whether a unit wears the badge right now.
@@ -1080,6 +1190,7 @@ local function OnMessage(prefix, message, route, sender)
     if requested then
         if requested == myGUID and GetTime() - lastAnswer >= 5 then
             lastAnswer = GetTime()
+            Debug("Someone on " .. (ROUTES[route] or route) .. " asked whether you have the addon: announcing your status.", true)
             Announce(true)
         end
         return
@@ -1088,7 +1199,10 @@ local function OnMessage(prefix, message, route, sender)
     local isPledge = guid ~= nil
     if not guid then guid, peer = A.Decode(message) end
     if guid and guid ~= myGUID then
-        if debugEnabled then Debug("RX " .. route .. " " .. message) end
+        if debugEnabled then
+            -- The status line every minute; the pledge-level companion only in verbose.
+            Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", isPledge)
+        end
         -- Hearing from someone always overrides an earlier "no addon".
         noAddon[guid], asking[guid] = nil, nil
         TimeResult("answer", guid)
@@ -1118,7 +1232,6 @@ local function Tick()
     end
     if char.sworn and not Desired() then UpdatePrompt() end
     if lastPayload ~= A.Encode(myGUID or "", Sworn()) or lastPledgePayload ~= PledgePayload() or not lastAnnounce or now - lastAnnounce >= 60 then
-        Debug("Timer: status changed or 60-second update due")
         Announce(true)
     end
     if not ChannelID() and now - lastJoin >= 60 then JoinChannel() end
@@ -1151,13 +1264,18 @@ SlashCmdList.HONORBOUND = function(input)
         elseif debugCommand == "off" then debugEnabled, debugVerbose = false, false
         elseif debugCommand == "" then debugEnabled, debugVerbose = not debugEnabled, false
         else Print("Use /honor debug on, /honor debug verbose or /honor debug off.") return end
-        Print("Debug " .. (not debugEnabled and "off." or (debugVerbose and "verbose" or "on")
-            .. " (until reload/logout). Accepted sends do not confirm delivery."))
-        if debugEnabled then
-            Debug("Community channel=" .. tostring(ChannelID()) .. "; group=" .. tostring(GroupRoute())
-                .. "; guild=" .. tostring(IsInGuild()) .. "; last accepted broadcast="
-                .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. "s ago") or "none")
-                .. "; probes queued=" .. probeCount .. ", replies queued=" .. #replies)
+        if not debugEnabled then
+            Print("Debug off.")
+        else
+            Print(debugVerbose and "Debug verbose until you reload or log out: every message sent and received, plus a summary."
+                or "Debug on until you reload or log out: status, shares, failures and a summary. /honor debug verbose shows everything.")
+            local channel = ChannelID()
+            Debug("Realm channel: " .. (channel and ("connected (/" .. channel .. ")") or "not joined yet")
+                .. ". Group: " .. (GroupRoute() and ROUTES[GroupRoute()]:gsub("^your ", "") or "none")
+                .. ". Guild: " .. (IsInGuild() and "yes" or "no")
+                .. ". Last status sent: " .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. " s ago") or "not yet")
+                .. ". Waiting in line: " .. probeCount .. ". Replies to send: " .. #replies .. ".")
+            Debug("\"Sent\" means the game accepted it, not that anyone received it.")
         end
         return
     end

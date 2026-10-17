@@ -154,7 +154,13 @@ debugging, players without a real crest show a **faint grey** crest while
 they're being asked and a **solid grey** one once marked no-addon, and each
 summary includes a coverage line over the nameplates in view:
 
-`Plates 40: addon 4, no addon 20, waiting 5, queued 11, not asked 0 | seen→probe avg 18s, seen→answer avg 21s, seen→no-addon avg 49s | sim 10%`
+`40 players on screen: 4 have the addon, 20 don't, 5 being asked, 11 waiting in line, 0 not asked. (Simulating 10% addon users.) On average after first seeing someone: asked in 18 s, answered in 21 s, ruled out in 49 s.`
+
+Debug lines are plain sentences with the time and a coloured first word —
+**Sent** (yellow), **Heard** (green), **Couldn't send** (red, with the reason,
+e.g. "the channel is busy, the game is throttling us"). `/honor debug on`
+shows your status updates, shares, anything heard on the channel, failures and
+the summaries; `/honor debug verbose` adds every probe, reply and message.
 
 ### Simulation
 

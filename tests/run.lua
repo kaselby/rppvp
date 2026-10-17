@@ -85,7 +85,8 @@ plate.UnitFrame.name = object()
 function methods:GetStringWidth() return 80 end
 C_NamePlate = { GetNamePlateForUnit = function(unit) return unit == "nameplate1" and plate or nil end }
 UnitPopupPvpDisableButtonMixin = { IsEnabled = function() return true end }
-DEFAULT_CHAT_FRAME = { AddMessage = function() end }
+debugLines = {}
+DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) debugLines[#debugLines + 1] = text end }
 SlashCmdList = { PVP = function() desired = not desired end }
 LE_PARTY_CATEGORY_INSTANCE = 2
 function GetTime() return now end
@@ -505,4 +506,36 @@ end
 local off, on = crowdWhispers(nil), crowdWhispers(100)
 check(on <= 5 + 60 / 2 and on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
 SlashCmdList.HONORBOUND("sim off")
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests and simulation.")
+
+-- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
+debugLines = {}
+SlashCmdList.HONORBOUND("debug verbose")
+players["Player-99-DB0001"] = { name = "Readable", realm = "Other Realm" }
+addon("WQ|1|Player-99-DB0001|1|12|0.3.1", "Readable-OtherRealm")
+shared("F|1|Player-99-DB0002|Sharer-OtherRealm|1|30|0.3.1")
+shared("N|1|99-DB0003,99-DB0004")
+event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, true), "CHANNEL", "Neighbour")
+units.mouseover = { guid = "Player-99-DB0005", flagged = true, faction = "Horde", name = "Quiet", realm = "Other Realm" }
+event("UPDATE_MOUSEOVER_UNIT")
+channelResult = 8
+advance(70)
+channelResult = nil
+SlashCmdList.HONORBOUND("debug on")
+local raw, guids = {}, {}
+for _, line in ipairs(debugLines) do
+    local plain = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    if plain:find("|") then raw[#raw + 1] = plain end
+    if plain:find("Player%-%d") then guids[#guids + 1] = plain end
+end
+check(#raw == 0, "no protocol text in debug lines: " .. table.concat(raw, " / "))
+check(#guids == 0, "no raw GUIDs in debug lines: " .. table.concat(guids, " / "))
+-- A refused status update waits 10 s instead of retrying every second.
+local refused = 0
+for _, line in ipairs(debugLines) do
+    if line:find("Couldn't send", 1, true) and line:find("your status", 1, true) then refused = refused + 1 end
+end
+check(refused <= 8, "refused status updates back off (" .. refused .. " in 70 s)")
+check(#debugLines > 8, "verbose debug produced output (" .. #debugLines .. " lines)")
+if os.getenv("SHOW_DEBUG") then for _, line in ipairs(debugLines) do print((line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))) end end
+SlashCmdList.HONORBOUND("debug off")
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation and readable debug.")
