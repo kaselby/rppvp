@@ -117,3 +117,52 @@ function A.InstallChat(enabled, pledged, faction, overlay)
     end
     return true
 end
+
+-- /honor chatcheck: what the chat frames on this client actually look like,
+-- to see why first-line crests do or don't work. Read only.
+local function Raw(text)
+    if not accessible(text) then return "(hidden by the game)" end
+    if type(text) ~= "string" then return "(" .. type(text) .. ")" end
+    text = text:gsub("|", "||")
+    return #text > 220 and (text:sub(1, 220) .. "...") or text
+end
+function A.ChatCheck(say)
+    local frame = _G.ChatFrame1
+    say("Chat name hook: " .. (A.chatRules and "installed" or "missing (no crests in chat at all)") .. ".")
+    if not frame then say("ChatFrame1 not found.") return end
+    say("ChatFrame1 can rewrite old lines (TransformMessages): "
+        .. (type(frame.TransformMessages) == "function" and "yes" or "no") .. ".")
+    local remembered, newest = #lineOrder, lineOrder[#lineOrder]
+    say("Chat lines remembered by HonorBound: " .. remembered
+        .. (newest and (" (newest line ID " .. tostring(newest) .. ")") or "") .. ".")
+    if type(frame.TransformMessages) == "function" then
+        local seen, shape, last, matches = 0, nil, nil, 0
+        local wanted = {}
+        for i = math.max(1, #lineOrder - 20), #lineOrder do wanted[#wanted + 1] = ":" .. tostring(lineOrder[i]) .. ":" end
+        local ok, err = pcall(frame.TransformMessages, frame, function(entry)
+            seen = seen + 1
+            if not shape then
+                if type(entry) == "table" then
+                    local keys = {}
+                    for key in pairs(entry) do keys[#keys + 1] = tostring(key) end
+                    table.sort(keys)
+                    shape = "table with " .. table.concat(keys, ", ")
+                else
+                    shape = type(entry)
+                end
+            end
+            local text = type(entry) == "table" and entry.message or entry
+            if accessible(text) and type(text) == "string" then
+                last = text
+                for _, token in ipairs(wanted) do
+                    if text:find("|Hplayer:", 1, true) and text:find(token, 1, true) then matches = matches + 1 break end
+                end
+            end
+            return false
+        end, function() end)
+        if not ok then say("TransformMessages errored: " .. tostring(err)) return end
+        say("Lines in ChatFrame1: " .. seen .. ". Each line is a " .. tostring(shape) .. ".")
+        say("Lines matching a remembered line ID inside a player link: " .. matches .. ".")
+        say("A line as stored: " .. Raw(last))
+    end
+end

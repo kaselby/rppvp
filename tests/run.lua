@@ -582,6 +582,12 @@ SlashCmdList.HONORBOUND("debug off")
 -- Sim off takes simulated crests back off old lines.
 SlashCmdList.HONORBOUND("sim off")
 check(crests(first) == 0 and crests(second) == 0, "sim off removes simulated crests from old lines")
+debugLines = {}
+SlashCmdList.HONORBOUND("chatcheck")
+local report = table.concat(debugLines, "\n")
+if os.getenv("SHOW_CHECK") then print(report) end
+check(report:find("rewrite old lines (TransformMessages): yes", 1, true) and report:find("Each line is a table with message", 1, true)
+    and report:find("matching a remembered line ID inside a player link: ", 1, true), "chatcheck reports the chat frame's shape")
 ChatFrame1, ChatFrame2 = nil, nil
 
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.

@@ -138,3 +138,10 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   clients without it or for hidden (secret) lines.
 - Old crests in a name are replaced, never stacked; /honor sim off removes
   simulated crests from old lines.
+
+# 0.3.8
+
+- /honor chatcheck: read-only report on the chat frames (name hook installed,
+  TransformMessages present, how lines are stored, whether remembered line
+  IDs appear in player links, one raw stored line) to diagnose first-line
+  crests on a given client.

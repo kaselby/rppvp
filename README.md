@@ -50,6 +50,7 @@ An unflagged player never shows a crest, whatever their addon claims.
 - `/honor chat on|off`: toggle crests in chat.
 - `/honor debug on|verbose|off`: discovery diagnostics for this session.
 - `/honor sim 10` / `/honor sim off`: simulation for testing discovery (below).
+- `/honor chatcheck`: report how this client's chat frames store lines (diagnoses chat crests).
 - `/honor scale 1.2`: crest size, from 0.6 to 2.
 - `/honor offset 0 0`: nudge the crest from the PvP icon position, in UI pixels.
 - `/honor reset`: reset appearance settings.

@@ -1325,6 +1325,10 @@ SlashCmdList.HONORBOUND = function(input)
         Refresh()
         return
     end
+    if (input or ""):lower():match("^%s*chatcheck%s*$") then
+        A.ChatCheck(Print)
+        return
+    end
     local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")
     if chatCommand ~= nil then
         if chatCommand == "on" then db.chatIcons = true
