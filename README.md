@@ -156,6 +156,11 @@ summary includes a coverage line over the nameplates in view:
 
 `40 players on screen: 4 have the addon, 20 don't, 5 being asked, 11 waiting in line, 0 not asked. (Simulating 10% addon users.) On average after first seeing someone: asked in 18 s, answered in 21 s, ruled out in 49 s.`
 
+In chat, while debugging or simulating, speakers get a **dim grey** crest
+while being asked and a **light grey** one once marked no-addon (chat icons
+can't be faded, so `Media/CrestGrey.tga` is tinted instead). Like the full
+crest, it can only appear from a speaker's second message on.
+
 Debug lines are plain sentences with the time and a coloured first word —
 **Sent** (yellow), **Heard** (green), **Couldn't send** (red, with the reason,
 e.g. "the channel is busy, the game is throttling us"). `/honor debug on`

@@ -1280,6 +1280,9 @@ SlashCmdList.HONORBOUND = function(input)
                 .. ". Guild: " .. (IsInGuild() and "yes" or "no")
                 .. ". Last status sent: " .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. " s ago") or "not yet")
                 .. ". Waiting in line: " .. probeCount .. ". Replies to send: " .. #replies .. ".")
+            Debug("Chat crests: " .. (not A.chatAvailable and "unavailable on this client (the chat name hook is missing)"
+                or db.chatIcons == false and "off (/honor chat on)" or "on")
+                .. (IsAddOnLoaded and IsAddOnLoaded("Prat-3.0") and ". Prat is loaded and may hide them." or "."))
             Debug("\"Sent\" means the game accepted it, not that anyone received it.")
         end
         return
@@ -1392,7 +1395,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             if guid == myGUID then return Sworn() end
             local peer = peers[guid]
             return peer and peer.sworn and GetTime() - peer.seen < A.TTL
-        end, ChatFaction)
+        end, ChatFaction, function(guid)
+            -- Grey crests in chat only while debugging or simulating.
+            if debugEnabled or simPercent then return DebugState(guid) end
+        end)
         -- Give the client's usual channels time to claim their channel numbers.
         lastJoin = GetTime() - 45
         C_ChatInfo.RegisterAddonMessagePrefix(A.PREFIX)

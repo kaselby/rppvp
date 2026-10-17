@@ -519,6 +519,20 @@ check(crest.shown and not crest.desaturated, "and gets a full crest")
 check(HonorBoundDB.noAddon[ruled], "the saved no-addon list itself is untouched")
 SlashCmdList.HONORBOUND("sim off")
 
+-- Chat shows the grey states while debugging.
+SlashCmdList.HONORBOUND("debug on")
+local askedInChat = "Player-99-C4A001"
+say("Asked-OtherRealm", askedInChat)
+check(probeSent("Asked-OtherRealm"), "trade/say speaker gets probed")
+local line = chatCrest(askedInChat, "Asked")
+check(line and line:find("CrestGrey.tga", 1, true) and line:find(":110:110:110|t", 1, true), "dim grey crest in chat while being asked")
+advance(31)
+line = chatCrest(askedInChat, "Asked")
+check(line and line:find("CrestGrey.tga", 1, true) and line:find(":255:255:255|t", 1, true), "light grey crest in chat once marked no-addon")
+check(chatCrest(askedInChat, line) == nil, "grey crest isn't added twice")
+SlashCmdList.HONORBOUND("debug off")
+check(chatCrest(askedInChat, "Asked") == nil, "no grey crests in chat when debug is off")
+
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
 debugLines = {}
 SlashCmdList.HONORBOUND("debug verbose")

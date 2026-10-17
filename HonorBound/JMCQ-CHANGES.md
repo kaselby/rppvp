@@ -109,3 +109,11 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   the session or a shared list) were never asked again, so simulated users
   among them stayed solid grey. Simulated users now skip the list; the list
   itself is unchanged for everyone else.
+
+# 0.3.4
+
+- Chat shows the debug states too (debug or sim on): dim grey crest while a
+  speaker is being asked, light grey once marked no-addon. New
+  Media/CrestGrey.tga.
+- /honor debug on reports whether chat crests can work on this client, and
+  warns when Prat is loaded.
