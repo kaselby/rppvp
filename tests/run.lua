@@ -507,6 +507,18 @@ local off, on = crowdWhispers(nil), crowdWhispers(100)
 check(on <= 5 + 60 / 2 and on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
 SlashCmdList.HONORBOUND("sim off")
 
+-- Simulated users already on the no-addon list still get asked and answer.
+local ruled = "Player-99-5AA0F0"
+HonorBoundDB.noAddon[ruled] = time() + 7200
+SlashCmdList.HONORBOUND("sim 100")
+units.nameplate1 = { guid = ruled, flagged = false, faction = "Horde", name = "Ruled", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(probeSent("Ruled-OtherRealm"), "a simulated user on the no-addon list is still probed")
+advance(4)
+check(crest.shown and not crest.desaturated, "and gets a full crest")
+check(HonorBoundDB.noAddon[ruled], "the saved no-addon list itself is untouched")
+SlashCmdList.HONORBOUND("sim off")
+
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
 debugLines = {}
 SlashCmdList.HONORBOUND("debug verbose")

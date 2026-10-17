@@ -265,6 +265,11 @@ A.SimHash = SimHash
 local function Simulated(guid)
     return simPercent ~= nil and SimHash(guid) < simPercent
 end
+-- On the no-addon list right now. A simulated user stands in for someone who
+-- has the addon, who wouldn't be on it, so the list never blocks them.
+local function RuledOut(guid)
+    return noAddon[guid] and time() < noAddon[guid] and not Simulated(guid)
+end
 local function Seen(guid)
     if seenAt[guid] == nil then seenAt[guid] = GetTime() end
 end
@@ -399,7 +404,7 @@ local function Probe(guid, priority, name)
     -- Spread re-probes so a whole realm doesn't refresh the same player at once.
     jitter[guid] = jitter[guid] or math.random(0, 60)
     if peer and now - peer.seen < REPROBE_AFTER + jitter[guid] then return end
-    if pending[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
+    if pending[guid] or RuledOut(guid) then return end
     if likely[guid] then priority = PRIORITY_LIKELY end
     name = name or names[guid] or (likely[guid] and likely[guid].name)
     Seen(guid)
@@ -431,7 +436,7 @@ local function Query(guid, priority, name)
     if not guid or not myGUID or guid == myGUID then return end
     if OtherRealm(guid) then return Probe(guid, priority or PRIORITY_PLATE, name) end
     -- Ask each same-realm stranger once; silence puts them on the list.
-    if asking[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
+    if asking[guid] or RuledOut(guid) then return end
     local now = GetTime()
     if peers[guid] and now - peers[guid].seen < 60 then return end
     Seen(guid)
@@ -727,7 +732,7 @@ end
 local function DebugState(guid)
     if not guid or guid == myGUID then return end
     if pending[guid] or asking[guid] then return "asked" end
-    if noAddon[guid] and time() < noAddon[guid] then return "none" end
+    if RuledOut(guid) then return "none" end
 end
 -- How far discovery has got over the nameplates in view, and how long it took.
 local function Coverage()

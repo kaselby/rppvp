@@ -102,3 +102,10 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   share counts only include sends that went through.
 - Fixed: when the channel refused a status update it was retried every
   second; it now waits 10 s.
+
+# 0.3.3
+
+- Fixed: in simulation, players already on the no-addon list (from earlier in
+  the session or a shared list) were never asked again, so simulated users
+  among them stayed solid grey. Simulated users now skip the list; the list
+  itself is unchanged for everyone else.
