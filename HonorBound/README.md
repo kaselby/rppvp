@@ -158,7 +158,15 @@ summary includes a coverage line over the nameplates in view:
 
 Chat shows the same states while debugging or simulating: **light grey**
 while being asked, **dark grey** once marked no-addon (`Media/CrestGrey.tga`,
-tinted). Like the full crest, it can only appear from a speaker's second
+tinted).
+
+A stranger's first message prints before anyone knows whether they have the
+addon. HonorBound remembers the last 300 chat lines by line ID and, when a
+player's status changes (asked, answered, ruled out, shared, simulated),
+rewrites the crest inside their name on lines already in chat, using the chat
+frames' `TransformMessages`. So the first line gains its crest a second or two
+after it appears. On clients without that method, or for lines the game keeps
+hidden during encounters, nothing changes and the crest shows from the next
 message on.
 
 Debug lines are plain sentences with the time and a coloured first word —

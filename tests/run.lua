@@ -534,6 +534,56 @@ check(chatCrest(askedInChat, line) == nil, "grey crest isn't added twice")
 SlashCmdList.HONORBOUND("debug off")
 check(chatCrest(askedInChat, "Asked") == nil, "no grey crests in chat when debug is off")
 
+-- First messages: lines already in chat get their crest once the probe answers.
+local history = {}
+ChatFrame1 = { TransformMessages = function(self, predicate, transform)
+    for _, entry in ipairs(history) do if predicate(entry) then transform(entry) end end
+end }
+ChatFrame2 = {} -- a frame without history rewriting is left alone
+local nextLine = 5000
+local function printChat(sender, guid, text)
+    nextLine = nextLine + 1
+    local args = {}
+    args[11], args[12] = nextLine, guid
+    local shown = ChatFrameUtil.filter("CHAT_MSG_CHANNEL", sender:match("^[^%-]+"), unpack(args, 1, 12))
+    local entry = { message = ("|Hplayer:%s:%d:CHANNEL:2|h[%s]|h: %s"):format(sender, nextLine, shown or sender:match("^[^%-]+"), text) }
+    history[#history + 1] = entry
+    event("CHAT_MSG_CHANNEL", text, sender, "", "2. Trade", sender, "", 0, 2, "Trade", 0, nextLine, guid)
+    return entry
+end
+local function crests(entry)
+    local _, n = entry.message:gsub("Media\\Crest", "")
+    return n
+end
+SlashCmdList.HONORBOUND("sim 100")
+SlashCmdList.HONORBOUND("debug off")
+local trader = "Player-99-F1A001"
+local first = printChat("Trader-OtherRealm", trader, "WTS stuff")
+check(crests(first) == 0, "a stranger's first line prints without a crest")
+check(probeSent("Trader-OtherRealm"), "the trade line starts a probe")
+advance(4)
+check(first.message:find("CrestHorde.tga", 1, true) or first.message:find("CrestAlliance.tga", 1, true), "the first line gets its crest once they answer")
+check(crests(first) == 1 and first.message:find("|h[|T", 1, true), "exactly one crest, inside the name")
+check(first.message:find("|h: WTS stuff", 1, true), "the message text is untouched")
+local second = printChat("Trader-OtherRealm", trader, "still selling")
+check(crests(second) == 1, "later lines get the crest when printed")
+
+-- Debug: the grey states show on the line and are replaced, never stacked.
+SlashCmdList.HONORBOUND("sim 0")
+SlashCmdList.HONORBOUND("debug on")
+local silentTrader = "Player-99-F1A002"
+local line = printChat("Lfger-OtherRealm", silentTrader, "LFG")
+check(probeSent("Lfger-OtherRealm"), "silent trader probed")
+check(line.message:find("CrestGrey.tga", 1, true) and line.message:find(":255:255:255|t", 1, true), "first line turns light grey while being asked")
+advance(31)
+check(line.message:find(":102:102:102|t", 1, true) and crests(line) == 1, "then dark grey, replacing the light grey")
+SlashCmdList.HONORBOUND("debug off")
+
+-- Sim off takes simulated crests back off old lines.
+SlashCmdList.HONORBOUND("sim off")
+check(crests(first) == 0 and crests(second) == 0, "sim off removes simulated crests from old lines")
+ChatFrame1, ChatFrame2 = nil, nil
+
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
 debugLines = {}
 SlashCmdList.HONORBOUND("debug verbose")

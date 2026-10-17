@@ -374,6 +374,10 @@ local function SameStatus(record, peer)
     return record and record.sworn == peer.sworn and record.level == (peer.pledgedSinceLevel or 0)
 end
 
+-- A player's status changed: fix the crest on their recent chat lines too.
+local function ChatChanged(guid)
+    if A.RefreshChatFor then A.RefreshChatFor(guid) end
+end
 -- A simulated user answering our probe or question. Only resolves if we're
 -- still waiting: a real reply, an unreachable error or a timeout wins.
 local function SimAnswer(guid, name)
@@ -384,6 +388,7 @@ local function SimAnswer(guid, name)
     peers[guid] = {sworn = true, version = "sim", simulated = true, seen = now}
     Debug(HEARD .. " a simulated answer from " .. (name or Who(guid)) .. ".", true)
     TimeResult("answer", guid)
+    ChatChanged(guid)
     -- Tell other testers on our realm (FS: ignored by everyone not simulating).
     if OtherRealm(guid) and ValidName(name) and not shares[guid] then
         shares[guid] = {due = now + Between(SHARE_WAIT), peer = peers[guid],
@@ -453,6 +458,7 @@ local function Query(guid, priority, name)
     if sent then
         queries[guid], lastQuery, asking[guid] = now, now, now
         stats.asked = stats.asked + 1
+        ChatChanged(guid)
         SimProbe(guid)
     end
 end
@@ -486,6 +492,7 @@ local function MarkNoAddon(guid, why)
     end
     stats[why] = stats[why] + 1
     TimeResult("none", guid)
+    ChatChanged(guid)
 end
 
 -- At most one whisper a second, and only while the shared budget allows.
@@ -526,6 +533,7 @@ local function PumpWhispers(now)
     pending[best] = {at = now, name = name}
     stats.probed = stats.probed + 1
     Send(WhisperPayload("Q"), "WHISPER", name)
+    ChatChanged(best)
     SimProbe(best, name)
 end
 -- Channel posts are optional: they wait for spare budget and back off when
@@ -600,6 +608,7 @@ local function OnWhisper(message, sender)
     if ValidName(name) then likely[guid] = {name = name, seen = time()} end
     Unqueue(guid)
     ShareFound(guid, name, peer)
+    ChatChanged(guid)
     -- If our probe already reached them they have our status; otherwise answer.
     local queued = false
     for _, r in ipairs(replies) do queued = queued or r.name == name end
@@ -630,6 +639,7 @@ local function OnShare(message)
         names[guid], noAddon[guid] = name, nil
         likely[guid] = {name = name, seen = time()}
         Unqueue(guid)
+        ChatChanged(guid)
         Refresh()
         return true
     end
@@ -651,6 +661,7 @@ local function OnShare(message)
             if not likely[guid] and not (peer and now - peer.seen < A.TTL) and not Simulated(guid) then
                 noAddon[guid] = math.max(noAddon[guid] or 0, expires)
                 Unqueue(guid)
+                ChatChanged(guid)
             end
         end
     end
@@ -677,6 +688,7 @@ local function OnSimShare(message)
     end
     if ValidName(name) then names[guid] = name end
     Unqueue(guid)
+    ChatChanged(guid)
     Refresh()
 end
 
@@ -1215,6 +1227,7 @@ local function OnMessage(prefix, message, route, sender)
         noAddon[guid], asking[guid] = nil, nil
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
+        ChatChanged(guid)
         Refresh()
     end
 end
@@ -1295,7 +1308,7 @@ SlashCmdList.HONORBOUND = function(input)
         if simCommand == "off" then
             simPercent = nil
             for guid, peer in pairs(peers) do
-                if peer.simulated then peers[guid] = nil end
+                if peer.simulated then peers[guid] = nil ChatChanged(guid) end
             end
             Print("Simulation off. Simulated badges removed; everything learned for real is kept.")
         elseif simCommand ~= "" then

@@ -24,16 +24,73 @@ local function accessible(value)
         and (not canaccessvalue or canaccessvalue(value))
 end
 
+-- The crest a sender should wear right now, or "" for none.
+local function CurrentIcon(rules, guid)
+    if not rules.enabled() then return "" end
+    if rules.pledged(guid) then return Icon(rules.faction(guid)) end
+    local state = rules.overlay and rules.overlay(guid)
+    return GREY[state] and GreyIcon(state) or ""
+end
+
+-- Recent chat lines by line ID, so a crest can be fixed once a probe
+-- answers: the first message from a stranger prints before we know them.
+local LINES_KEPT = 300
+local lineGuid, lineOrder = {}, {}
+local function RememberLine(lineID, guid)
+    if lineGuid[lineID] then return end
+    lineGuid[lineID] = guid
+    lineOrder[#lineOrder + 1] = lineID
+    if #lineOrder > LINES_KEPT then lineGuid[table.remove(lineOrder, 1)] = nil end
+end
+
 function A.CreateChatFilter(enabled, pledged, faction, overlay)
+    local rules = {enabled = enabled, pledged = pledged, faction = faction, overlay = overlay}
     return function(event, name, ...)
-        if not accessible(event) or not events[event] or not enabled() then return end
-        local guid = select(12, ...)
+        if not accessible(event) or not events[event] then return end
+        local lineID, guid = select(11, ...)
         if not accessible(name) or type(name) ~= "string"
             or not accessible(guid) or not A.ValidGUID(guid) then return end
+        if accessible(lineID) and type(lineID) == "number" then RememberLine(lineID, guid) end
         if name:find(crests, 1, true) then return end
-        if pledged(guid) then return Icon(faction(guid)) .. name end
-        local state = overlay and overlay(guid)
-        if GREY[state] then return GreyIcon(state) .. name end
+        local icon = CurrentIcon(rules, guid)
+        if icon ~= "" then return icon .. name end
+    end, rules
+end
+
+-- Swap the crest inside a player link's [name], dropping any older crest.
+local function Recrest(text, lineID, icon)
+    local head, shown, tail = text:match("^(.-|Hplayer:[^|]-:" .. lineID .. ":[^|]*|h)(.-)(|h.*)$")
+    if not head then return end
+    shown = shown:gsub("|T[^|]-Media\\Crest[^|]-|t ", "")
+    shown = shown:gsub("%[", "[" .. icon, 1)
+    return head .. shown .. tail
+end
+-- Bring already-printed lines from this player up to date, where the chat
+-- frames allow rewriting history. Lines the game keeps hidden are skipped.
+function A.RefreshChatFor(guid)
+    local rules = A.chatRules
+    if not rules or not guid then return end
+    local ids = {}
+    for lineID, owner in pairs(lineGuid) do
+        if owner == guid then ids[#ids + 1] = lineID end
+    end
+    if #ids == 0 then return end
+    local icon = CurrentIcon(rules, guid)
+    local function update(entry)
+        local text = type(entry) == "table" and entry.message
+        if not accessible(text) or type(text) ~= "string" or not text:find("|Hplayer:", 1, true) then return end
+        for _, lineID in ipairs(ids) do
+            local changed = Recrest(text, lineID, icon)
+            if changed then return changed end
+        end
+    end
+    for i = 1, NUM_CHAT_WINDOWS or 10 do
+        local frame = _G["ChatFrame" .. i]
+        if frame and type(frame.TransformMessages) == "function" then
+            pcall(frame.TransformMessages, frame,
+                function(entry) local changed = update(entry) return changed ~= nil and changed ~= entry.message end,
+                function(entry) local changed = update(entry) if changed then entry.message = changed end end)
+        end
     end
 end
 
@@ -42,8 +99,8 @@ function A.InstallChat(enabled, pledged, faction, overlay)
     local api = ChatFrameUtil
     if not api or type(api.AddSenderNameFilter) ~= "function"
         or type(api.RemoveSenderNameFilter) ~= "function" then return false end
-    local filter = A.CreateChatFilter(enabled, pledged, faction, overlay)
-    A.chatFilter = filter
+    local filter, rules = A.CreateChatFilter(enabled, pledged, faction, overlay)
+    A.chatFilter, A.chatRules = filter, rules
     api.AddSenderNameFilter(filter)
     -- TRP3 rebuilds names. Run after name filters, including ones re-registered
     -- by settings changes. Never replace another addon's function or filter.

@@ -128,3 +128,13 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
 
 - No-addon debug crest is dark grey instead of red, so it can't be mistaken
   for a Horde crest. Being asked stays light grey.
+
+# 0.3.7: crests on first chat messages
+
+- Lines already in chat are updated when a player's status changes: the first
+  message from a stranger gains its crest (or grey debug crest) once the
+  probe answers, instead of only later messages. Uses the chat frames'
+  TransformMessages over the last 300 remembered line IDs; does nothing on
+  clients without it or for hidden (secret) lines.
+- Old crests in a name are replaced, never stacked; /honor sim off removes
+  simulated crests from old lines.
