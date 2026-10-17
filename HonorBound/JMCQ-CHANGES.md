@@ -117,3 +117,9 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   Media/CrestGrey.tga.
 - /honor debug on reports whether chat crests can work on this client, and
   warns when Prat is loaded.
+
+# 0.3.5
+
+- Debug overlay colours, everywhere (nameplates, unit frames, chat): solid
+  grey while being asked, red once marked no-addon, standard crest for addon
+  users.

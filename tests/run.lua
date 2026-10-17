@@ -49,6 +49,7 @@ function methods:ClearAllPoints() self.point = nil end
 function methods:SetScale(n) self.scale = n end
 function methods:SetAlpha(n) self.alpha = n end
 function methods:SetDesaturated(v) self.desaturated = v end
+function methods:SetVertexColor(r, g, b) self.tint = {r, g, b} end
 function methods:SetShown(value) self.shown = value and true or false end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
@@ -440,9 +441,9 @@ local simmed = "Player-99-5AA001"
 units.nameplate1 = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(probeSent("Simmy-OtherRealm"), "simulation still sends the real probe")
-check(crest.shown and crest.desaturated and crest.alpha == 0.35, "faint grey crest while the probe is waiting")
+check(crest.shown and crest.desaturated and crest.alpha == 1 and crest.tint[2] == 1, "solid grey crest while the probe is waiting")
 advance(4)
-check(crest.shown and not crest.desaturated and crest.alpha == 1, "simulated user gets a full crest within 3 s")
+check(crest.shown and not crest.desaturated and crest.alpha == 1 and crest.tint[2] == 1, "simulated user gets a standard crest within 3 s")
 units.target = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
 event("PLAYER_TARGET_CHANGED")
 check(targetBadge().shown, "simulated user's crest shows on the target frame without a PvP flag")
@@ -477,7 +478,7 @@ units.nameplate1 = { guid = plain, flagged = false, faction = "Horde", name = "P
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(probeSent("Plain-OtherRealm"), "FS for a player our hash rejects is ignored, so we probe")
 advance(31)
-check(crest.shown and crest.desaturated and crest.alpha == 0.8, "solid grey once marked no-addon")
+check(crest.shown and crest.desaturated and crest.tint[1] == 1 and crest.tint[2] < 0.5, "red crest once marked no-addon")
 check(HonorBoundDB.noAddon[plain], "no-addon still saved while simulating")
 advance(45)
 check(#channelPosts("N|1|", plain:sub(8)) == 1, "no-addon still shared while simulating")
@@ -525,10 +526,10 @@ local askedInChat = "Player-99-C4A001"
 say("Asked-OtherRealm", askedInChat)
 check(probeSent("Asked-OtherRealm"), "trade/say speaker gets probed")
 local line = chatCrest(askedInChat, "Asked")
-check(line and line:find("CrestGrey.tga", 1, true) and line:find(":110:110:110|t", 1, true), "dim grey crest in chat while being asked")
+check(line and line:find("CrestGrey.tga", 1, true) and line:find(":255:255:255|t", 1, true), "solid grey crest in chat while being asked")
 advance(31)
 line = chatCrest(askedInChat, "Asked")
-check(line and line:find("CrestGrey.tga", 1, true) and line:find(":255:255:255|t", 1, true), "light grey crest in chat once marked no-addon")
+check(line and line:find("CrestGrey.tga", 1, true) and line:find(":255:77:77|t", 1, true), "red crest in chat once marked no-addon")
 check(chatCrest(askedInChat, line) == nil, "grey crest isn't added twice")
 SlashCmdList.HONORBOUND("debug off")
 check(chatCrest(askedInChat, "Asked") == nil, "no grey crests in chat when debug is off")

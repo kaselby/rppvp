@@ -794,11 +794,14 @@ local function Status(unit)
     -- Simulated users stand in for "wears a badge", flagged or not.
     if peer and peer.sworn and GetTime() - peer.seen < A.TTL and (peer.simulated or Flagged(unit)) then return peer end
 end
--- Normal crest, or the debug overlay: faint grey while asked, solid grey
--- once marked no-addon.
+-- Normal crest, or the debug overlay: solid grey while being asked, red once
+-- marked no-addon.
+local OVERLAY_TINT = {asked = {1, 1, 1}, none = {1, 0.3, 0.3}}
 local function CrestLook(texture, state)
     if texture.SetDesaturated then texture:SetDesaturated(state ~= nil) end
-    texture:SetAlpha(state == "asked" and 0.35 or state == "none" and 0.8 or 1)
+    local tint = OVERLAY_TINT[state] or OVERLAY_TINT.asked
+    if texture.SetVertexColor then texture:SetVertexColor(tint[1], tint[2], tint[3]) end
+    texture:SetAlpha(1)
 end
 local function OverlayState(unit)
     if not (debugEnabled or simPercent) then return end

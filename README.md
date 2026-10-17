@@ -150,16 +150,16 @@ matter how many players run the addon.
 
 Debug: `/honor debug on` shows broadcasts, channel shares and a summary line
 each minute; `/honor debug verbose` adds every whisper probe and reply. While
-debugging, players without a real crest show a **faint grey** crest while
-they're being asked and a **solid grey** one once marked no-addon, and each
+debugging, players without a real crest show a **solid grey** crest while
+they're being asked and a **red** one once marked no-addon, and each
 summary includes a coverage line over the nameplates in view:
 
 `40 players on screen: 4 have the addon, 20 don't, 5 being asked, 11 waiting in line, 0 not asked. (Simulating 10% addon users.) On average after first seeing someone: asked in 18 s, answered in 21 s, ruled out in 49 s.`
 
-In chat, while debugging or simulating, speakers get a **dim grey** crest
-while being asked and a **light grey** one once marked no-addon (chat icons
-can't be faded, so `Media/CrestGrey.tga` is tinted instead). Like the full
-crest, it can only appear from a speaker's second message on.
+Chat shows the same states while debugging or simulating: **solid grey**
+while being asked, **red** once marked no-addon (`Media/CrestGrey.tga`,
+tinted). Like the full crest, it can only appear from a speaker's second
+message on.
 
 Debug lines are plain sentences with the time and a coloured first word —
 **Sent** (yellow), **Heard** (green), **Couldn't send** (red, with the reason,

@@ -13,9 +13,9 @@ local crests = "Interface\\AddOns\\HonorBound\\Media\\Crest"
 local function Icon(faction)
     return "|T" .. crests .. (faction == "Horde" and "Horde" or "Alliance") .. ".tga:0:0|t "
 end
--- Debug overlay in chat: chat icons can't be faded, so a grey crest tinted
--- dim while being asked, and light once marked no-addon.
-local GREY = {asked = "110:110:110", none = "255:255:255"}
+-- Debug overlay in chat, matching nameplates: solid grey while being asked,
+-- red once marked no-addon.
+local GREY = {asked = "255:255:255", none = "255:77:77"}
 local function GreyIcon(state)
     return "|T" .. crests .. "Grey.tga:0:0:0:0:128:128:0:128:0:128:" .. GREY[state] .. "|t "
 end
