@@ -123,3 +123,8 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
 - Debug overlay colours, everywhere (nameplates, unit frames, chat): solid
   grey while being asked, red once marked no-addon, standard crest for addon
   users.
+
+# 0.3.6
+
+- No-addon debug crest is dark grey instead of red, so it can't be mistaken
+  for a Horde crest. Being asked stays light grey.
