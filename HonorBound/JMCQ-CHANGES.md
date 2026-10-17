@@ -145,3 +145,10 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
   TransformMessages present, how lines are stored, whether remembered line
   IDs appear in player links, one raw stored line) to diagnose first-line
   crests on a given client.
+
+# 0.3.9
+
+- Fixed first-line chat crests on Forever: its TransformMessages hands each
+  line over as text (not an entry table) and uses the returned values, so the
+  rewrite now works with the text and passes colours back unchanged. Entry
+  tables are still handled for other clients. (Found with /honor chatcheck.)

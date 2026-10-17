@@ -76,20 +76,37 @@ function A.RefreshChatFor(guid)
     end
     if #ids == 0 then return end
     local icon = CurrentIcon(rules, guid)
-    local function update(entry)
-        local text = type(entry) == "table" and entry.message
+    local function update(text)
         if not accessible(text) or type(text) ~= "string" or not text:find("|Hplayer:", 1, true) then return end
         for _, lineID in ipairs(ids) do
             local changed = Recrest(text, lineID, icon)
             if changed then return changed end
         end
     end
+    -- Clients differ in what they hand over: Forever passes the line's text
+    -- and uses what we return (so colours and extras go back unchanged);
+    -- others pass an entry table with a message field to edit in place.
+    local function textOf(entry)
+        if type(entry) == "table" then return entry.message end
+        return entry
+    end
+    local function predicate(entry)
+        local text = textOf(entry)
+        local changed = update(text)
+        return changed ~= nil and changed ~= text
+    end
+    local function transform(entry, ...)
+        if type(entry) == "table" then
+            local changed = update(entry.message)
+            if changed then entry.message = changed end
+            return entry, ...
+        end
+        return update(entry) or entry, ...
+    end
     for i = 1, NUM_CHAT_WINDOWS or 10 do
         local frame = _G["ChatFrame" .. i]
         if frame and type(frame.TransformMessages) == "function" then
-            pcall(frame.TransformMessages, frame,
-                function(entry) local changed = update(entry) return changed ~= nil and changed ~= entry.message end,
-                function(entry) local changed = update(entry) if changed then entry.message = changed end end)
+            pcall(frame.TransformMessages, frame, predicate, transform)
         end
     end
 end

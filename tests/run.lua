@@ -536,8 +536,19 @@ check(chatCrest(askedInChat, "Asked") == nil, "no grey crests in chat when debug
 
 -- First messages: lines already in chat get their crest once the probe answers.
 local history = {}
+-- Like Forever's client: callbacks get the line's text and colours, and the
+-- returned values replace them.
 ChatFrame1 = { TransformMessages = function(self, predicate, transform)
-    for _, entry in ipairs(history) do if predicate(entry) then transform(entry) end end
+    for _, entry in ipairs(history) do
+        if predicate(entry.message, entry.r, entry.g, entry.b) then
+            entry.message, entry.r, entry.g, entry.b = transform(entry.message, entry.r, entry.g, entry.b)
+        end
+    end
+end }
+-- Another client style: callbacks get the entry table and edit it in place.
+local tableHistory = {}
+ChatFrame3 = { TransformMessages = function(self, predicate, transform)
+    for _, entry in ipairs(tableHistory) do if predicate(entry) then transform(entry) end end
 end }
 ChatFrame2 = {} -- a frame without history rewriting is left alone
 local nextLine = 5000
@@ -546,8 +557,10 @@ local function printChat(sender, guid, text)
     local args = {}
     args[11], args[12] = nextLine, guid
     local shown = ChatFrameUtil.filter("CHAT_MSG_CHANNEL", sender:match("^[^%-]+"), unpack(args, 1, 12))
-    local entry = { message = ("|Hplayer:%s:%d:CHANNEL:2|h[%s]|h: %s"):format(sender, nextLine, shown or sender:match("^[^%-]+"), text) }
+    local entry = { message = ("|Hplayer:%s:%d:CHANNEL:2|h[%s]|h: %s"):format(sender, nextLine, shown or sender:match("^[^%-]+"), text),
+        r = 1, g = 0.75, b = 0.75 }
     history[#history + 1] = entry
+    tableHistory[#tableHistory + 1] = { message = entry.message }
     event("CHAT_MSG_CHANNEL", text, sender, "", "2. Trade", sender, "", 0, 2, "Trade", 0, nextLine, guid)
     return entry
 end
@@ -565,6 +578,8 @@ advance(4)
 check(first.message:find("CrestHorde.tga", 1, true) or first.message:find("CrestAlliance.tga", 1, true), "the first line gets its crest once they answer")
 check(crests(first) == 1 and first.message:find("|h[|T", 1, true), "exactly one crest, inside the name")
 check(first.message:find("|h: WTS stuff", 1, true), "the message text is untouched")
+check(first.r == 1 and first.g == 0.75 and first.b == 0.75, "the line's colour survives the rewrite")
+check(tableHistory[#tableHistory].message:find("|h[|T", 1, true), "clients that pass entry tables are updated too")
 local second = printChat("Trader-OtherRealm", trader, "still selling")
 check(crests(second) == 1, "later lines get the crest when printed")
 
@@ -586,9 +601,9 @@ debugLines = {}
 SlashCmdList.HONORBOUND("chatcheck")
 local report = table.concat(debugLines, "\n")
 if os.getenv("SHOW_CHECK") then print(report) end
-check(report:find("rewrite old lines (TransformMessages): yes", 1, true) and report:find("Each line is a table with message", 1, true)
+check(report:find("rewrite old lines (TransformMessages): yes", 1, true) and report:find("Each line is a string", 1, true)
     and report:find("matching a remembered line ID inside a player link: ", 1, true), "chatcheck reports the chat frame's shape")
-ChatFrame1, ChatFrame2 = nil, nil
+ChatFrame1, ChatFrame2, ChatFrame3 = nil, nil, nil
 
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
 debugLines = {}
