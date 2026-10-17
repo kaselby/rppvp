@@ -202,6 +202,40 @@ local asking = {}
 local stats = {asked = 0, askedSilent = 0, probed = 0, answered = 0, silent = 0, unreachable = 0,
     sharedF = 0, sharedN = 0, heardF = 0, heardN = 0}
 
+-- Simulation (/honor sim N): N% of the players we ask pretend to have the
+-- addon and answer quickly. Everything else stays real: probes, budget,
+-- timeouts and the no-addon list. Who pretends is a fixed hash of the GUID,
+-- so every tester with the same N sees the same players. Session only.
+local simPercent
+local SIM_DELAY = {0.5, 3} -- round trip plus the other side's reply queue
+-- Seen-to-result timings for the coverage line: {total seconds, count}.
+local seenAt, probeTimed = {}, {}
+local timings = {probe = {0, 0}, answer = {0, 0}, none = {0, 0}}
+local function SimHash(guid)
+    local h = 5381
+    for i = 1, #guid do h = (h * 33 + guid:byte(i)) % 4294967296 end
+    return h % 100
+end
+A.SimHash = SimHash
+local function Simulated(guid)
+    return simPercent ~= nil and SimHash(guid) < simPercent
+end
+local function Seen(guid)
+    if seenAt[guid] == nil then seenAt[guid] = GetTime() end
+end
+local function Timed(kind, guid)
+    local t, at = timings[kind], seenAt[guid]
+    if at then t[1], t[2] = t[1] + GetTime() - at, t[2] + 1 end
+end
+local function TimeProbe(guid)
+    if not probeTimed[guid] then probeTimed[guid] = true Timed("probe", guid) end
+end
+-- First result only: a later refresh of the same player isn't "populating".
+local function TimeResult(kind, guid)
+    Timed(kind, guid)
+    if seenAt[guid] then seenAt[guid] = false end
+end
+
 local function Server(guid)
     return guid and guid:match("^Player%-(%d+)%-")
 end
@@ -254,6 +288,29 @@ local function SameStatus(record, peer)
     return record and record.sworn == peer.sworn and record.level == (peer.pledgedSinceLevel or 0)
 end
 
+-- A simulated user answering our probe or question. Only resolves if we're
+-- still waiting: a real reply, an unreachable error or a timeout wins.
+local function SimAnswer(guid, name)
+    if not simPercent or not (pending[guid] or asking[guid]) then return end
+    pending[guid], asking[guid] = nil, nil
+    local now = GetTime()
+    stats.answered = stats.answered + 1
+    peers[guid] = {sworn = true, version = "sim", simulated = true, seen = now}
+    TimeResult("answer", guid)
+    -- Tell other testers on our realm (FS: ignored by everyone not simulating).
+    if OtherRealm(guid) and ValidName(name) and not shares[guid] then
+        shares[guid] = {due = now + Between(SHARE_WAIT), peer = peers[guid],
+            payload = ("FS|1|%s|%s|1|0|sim"):format(guid, name)}
+    end
+    Refresh()
+end
+local function SimProbe(guid, name)
+    TimeProbe(guid)
+    if Simulated(guid) then
+        C_Timer.After(Between(SIM_DELAY), function() SimAnswer(guid, name) end)
+    end
+end
+
 local function Probe(guid, priority, name)
     local now = GetTime()
     local peer = peers[guid]
@@ -263,6 +320,7 @@ local function Probe(guid, priority, name)
     if pending[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
     if likely[guid] then priority = PRIORITY_LIKELY end
     name = name or names[guid] or (likely[guid] and likely[guid].name)
+    Seen(guid)
     local entry = probes[guid]
     if entry then
         entry.priority = math.min(entry.priority, priority)
@@ -293,8 +351,9 @@ local function Query(guid, priority, name)
     -- Ask each same-realm stranger once; silence puts them on the list.
     if asking[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
     local now = GetTime()
-    if now - lastQuery < 1 then return end
     if peers[guid] and now - peers[guid].seen < 60 then return end
+    Seen(guid)
+    if now - lastQuery < 1 then return end
     if queries[guid] and now - queries[guid] < 15 then return end
     local id, route = ChannelID(), GroupRoute()
     local cost = (id and 1 or 0) + (route and 1 or 0) + (IsInGuild() and 1 or 0)
@@ -307,6 +366,7 @@ local function Query(guid, priority, name)
     if sent then
         queries[guid], lastQuery, asking[guid] = now, now, now
         stats.asked = stats.asked + 1
+        SimProbe(guid)
     end
 end
 local function QueryUnit(unit, priority)
@@ -338,6 +398,7 @@ local function MarkNoAddon(guid, why)
         unsharedNo[#unsharedNo + 1] = guid
     end
     stats[why] = stats[why] + 1
+    TimeResult("none", guid)
 end
 
 -- At most one whisper a second, and only while the shared budget allows.
@@ -378,6 +439,7 @@ local function PumpWhispers(now)
     pending[best] = {at = now, name = name}
     stats.probed = stats.probed + 1
     Send(WhisperPayload("Q"), "WHISPER", name)
+    SimProbe(best, name)
 end
 -- Channel posts are optional: they wait for spare budget and back off when
 -- the server pushes back.
@@ -435,6 +497,7 @@ local function OnWhisper(message, sender)
     local probed = pending[guid]
     pending[guid] = nil
     if probed then stats.answered = stats.answered + 1 end
+    TimeResult("answer", guid)
     -- Senders can arrive without a realm; prefer a full Name-Realm.
     local name = (probed and probed.name) or known or sender
     if ValidName(name) then likely[guid] = {name = name, seen = time()} end
@@ -483,8 +546,9 @@ local function OnShare(message)
         if A.ValidGUID(guid) then
             seen[guid] = true
             local peer = peers[guid]
-            -- Never let a relay hide a player we know has the addon.
-            if not likely[guid] and not (peer and now - peer.seen < A.TTL) then
+            -- Never let a relay hide a player we know has the addon, or one
+            -- we're simulating (a tester on a lower percentage would).
+            if not likely[guid] and not (peer and now - peer.seen < A.TTL) and not Simulated(guid) then
                 noAddon[guid] = math.max(noAddon[guid] or 0, expires)
                 Unqueue(guid)
             end
@@ -496,6 +560,23 @@ local function OnShare(message)
     end
     nextNoPost = math.max(nextNoPost, now + Between(NO_GAP))
     return true
+end
+-- Another tester's simulated find. Only taken when our own hash agrees, so
+-- mismatched settings never push fakes onto our screen.
+local function OnSimShare(message)
+    local guid, name = message:match("^FS|1|([^|]+)|([^|]+)|1|0|sim$")
+    if not guid or guid == myGUID or not A.ValidGUID(guid) or not Simulated(guid) then return end
+    local now = GetTime()
+    heard[guid] = {at = now, sworn = true, level = 0}
+    shares[guid] = nil
+    local current = peers[guid]
+    if not (current and now - current.seen < A.TTL) then
+        peers[guid] = {sworn = true, version = "sim", simulated = true, relayed = true, seen = now}
+        TimeResult("answer", guid)
+    end
+    if ValidName(name) then names[guid] = name end
+    Unqueue(guid)
+    Refresh()
 end
 
 -- A probe to someone unreachable comes back as a system error; hide it.
@@ -542,9 +623,41 @@ local function PruneCaches()
     for guid, record in pairs(heard) do
         if clock - record.at > A.TTL then heard[guid] = nil end
     end
+    for guid, at in pairs(seenAt) do
+        if at and clock - at > 3600 then seenAt[guid], probeTimed[guid] = nil, nil end
+    end
+end
+-- Debug overlay states for players without a real crest.
+local function DebugState(guid)
+    if not guid or guid == myGUID then return end
+    if pending[guid] or asking[guid] then return "asked" end
+    if noAddon[guid] and time() < noAddon[guid] then return "none" end
+end
+-- How far discovery has got over the nameplates in view, and how long it took.
+local function Coverage()
+    local addon, none, asked, queued, other, total = 0, 0, 0, 0, 0, 0
+    local now = GetTime()
+    for unit in pairs(plates) do
+        local guid = GUID(unit)
+        if guid and guid ~= myGUID and UnitIsPlayer(unit) then
+            total = total + 1
+            local peer = peers[guid]
+            local state = DebugState(guid)
+            if peer and now - peer.seen < A.TTL then addon = addon + 1
+            elseif state == "asked" then asked = asked + 1
+            elseif state == "none" then none = none + 1
+            elseif probes[guid] then queued = queued + 1
+            else other = other + 1 end
+        end
+    end
+    local function avg(t) return t[2] > 0 and (math.floor(t[1] / t[2] + 0.5) .. "s") or "-" end
+    return ("Plates %d: addon %d, no addon %d, waiting %d, queued %d, not asked %d | seen→probe avg %s, seen→answer avg %s, seen→no-addon avg %s%s")
+        :format(total, addon, none, asked, queued, other, avg(timings.probe), avg(timings.answer),
+            avg(timings.none), simPercent and (" | sim " .. simPercent .. "%") or "")
 end
 -- One line a minute instead of a line per stranger.
 local function DebugSummary()
+    if simPercent or next(plates) then Debug(Coverage()) end
     if stats.asked + stats.probed + stats.sharedF + stats.sharedN + stats.heardF + stats.heardN == 0 then return end
     Debug(("Last minute: asked %d on realm (%d silent); probed %d, answered %d, no reply %d, unreachable %d; shared %d finds, %d no-addon lists; heard %d finds, %d lists; queued %d")
         :format(stats.asked, stats.askedSilent, stats.probed, stats.answered, stats.silent, stats.unreachable,
@@ -563,7 +676,18 @@ local function Status(unit)
         QueryUnit(unit, unit:find("^nameplate") and PRIORITY_PLATE or PRIORITY_UNIT)
     end
     local peer = peers[guid]
-    if peer and peer.sworn and GetTime() - peer.seen < A.TTL and Flagged(unit) then return peer end
+    -- Simulated users stand in for "wears a badge", flagged or not.
+    if peer and peer.sworn and GetTime() - peer.seen < A.TTL and (peer.simulated or Flagged(unit)) then return peer end
+end
+-- Normal crest, or the debug overlay: faint grey while asked, solid grey
+-- once marked no-addon.
+local function CrestLook(texture, state)
+    if texture.SetDesaturated then texture:SetDesaturated(state ~= nil) end
+    texture:SetAlpha(state == "asked" and 0.35 or state == "none" and 0.8 or 1)
+end
+local function OverlayState(unit)
+    if not (debugEnabled or simPercent) then return end
+    return DebugState(GUID(unit))
 end
 
 ---------------------------------------------------------------------------
@@ -900,8 +1024,11 @@ end
 RefreshPlate = function(unit)
     local crest = PlateCrest(unit)
     if not crest then return end
-    if db.plates and Status(unit) then
+    local wearing = Status(unit) ~= nil
+    local state = not wearing and OverlayState(unit)
+    if db.plates and (wearing or state) then
         crest:SetTexture(MEDIA .. "Crest" .. Faction(unit) .. ".tga")
+        CrestLook(crest, state or nil)
         crest:Show()
     else
         crest:Hide()
@@ -913,8 +1040,10 @@ Refresh = function()
     for _, widget in ipairs(widgets) do
         Attach(widget)
         local wearing = Status(widget.unit) ~= nil
-        if wearing then
+        local state = not wearing and OverlayState(widget.unit)
+        if wearing or state then
             widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
+            CrestLook(widget.crest, state or nil)
             if not widget:IsShown() then widget.fade:Play() end
             widget:Show()
         else
@@ -932,6 +1061,13 @@ end
 local function OnMessage(prefix, message, route, sender)
     if prefix ~= A.PREFIX or Secret(message) or type(message) ~= "string" or #message > 255 then return end
     if route == "WHISPER" then return OnWhisper(message, sender) end
+    if route == "CHANNEL" and message:find("^FS|") then
+        local me = UnitName("player")
+        if simPercent and not (type(sender) == "string" and not Secret(sender) and sender:match("^[^%-]+") == me) then
+            OnSimShare(message)
+        end
+        return
+    end
     if route == "CHANNEL" and message:find("^[FN]|") then
         -- Our own posts echo back on the channel; we already know what they say.
         local me = UnitName("player")
@@ -955,6 +1091,7 @@ local function OnMessage(prefix, message, route, sender)
         if debugEnabled then Debug("RX " .. route .. " " .. message) end
         -- Hearing from someone always overrides an earlier "no addon".
         noAddon[guid], asking[guid] = nil, nil
+        TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
         Refresh()
     end
@@ -974,7 +1111,7 @@ local function Tick()
         if now - at > A.TTL then queries[guid] = nil end
     end
     PumpProbes()
-    if now - lastMinute >= 60 then
+    if now - lastMinute >= (simPercent and 15 or 60) then
         lastMinute = now
         PruneCaches()
         DebugSummary()
@@ -1022,6 +1159,28 @@ SlashCmdList.HONORBOUND = function(input)
                 .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. "s ago") or "none")
                 .. "; probes queued=" .. probeCount .. ", replies queued=" .. #replies)
         end
+        return
+    end
+    local simCommand = (input or ""):lower():match("^%s*sim%s*(.-)%s*$")
+    if simCommand ~= nil then
+        if simCommand == "off" then
+            simPercent = nil
+            for guid, peer in pairs(peers) do
+                if peer.simulated then peers[guid] = nil end
+            end
+            Print("Simulation off. Simulated badges removed; everything learned for real is kept.")
+        elseif simCommand ~= "" then
+            local value = tonumber(simCommand:match("^(%d+)%%?$") or "")
+            if not value or value > 100 then Print("Use /honor sim 0-100 or /honor sim off.") return end
+            simPercent, debugEnabled = value, true
+            seenAt, probeTimed = {}, {}
+            timings = {probe = {0, 0}, answer = {0, 0}, none = {0, 0}}
+            Print(("Simulation on: %d%% of the players you ask answer as addon users. Probes, rate limits, timeouts and the no-addon list are real. Debug on."):format(value))
+        elseif not simPercent then
+            Print("Simulation off. /honor sim 10 makes 10% of the players you ask answer as addon users.")
+        end
+        if simPercent then Print(Coverage()) end
+        Refresh()
         return
     end
     local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")

@@ -49,6 +49,7 @@ An unflagged player never shows a crest, whatever their addon claims.
 - `/honor plates`: toggle crests on nameplates.
 - `/honor chat on|off`: toggle crests in chat.
 - `/honor debug on|verbose|off`: discovery diagnostics for this session.
+- `/honor sim 10` / `/honor sim off`: simulation for testing discovery (below).
 - `/honor scale 1.2`: crest size, from 0.6 to 2.
 - `/honor offset 0 0`: nudge the crest from the PvP icon position, in UI pixels.
 - `/honor reset`: reset appearance settings.
@@ -148,7 +149,32 @@ before-posting rule keeps shared finds and lists at about the same rate no
 matter how many players run the addon.
 
 Debug: `/honor debug on` shows broadcasts, channel shares and a summary line
-each minute; `/honor debug verbose` adds every whisper probe and reply.
+each minute; `/honor debug verbose` adds every whisper probe and reply. While
+debugging, players without a real crest show a **faint grey** crest while
+they're being asked and a **solid grey** one once marked no-addon, and each
+summary includes a coverage line over the nameplates in view:
+
+`Plates 40: addon 4, no addon 20, waiting 5, queued 11, not asked 0 | seen→probe avg 18s, seen→answer avg 21s, seen→no-addon avg 49s | sim 10%`
+
+### Simulation
+
+Few players run the addon yet, so almost every probe ends in the 30 s no-reply
+timeout. `/honor sim N` makes N% of the players you ask answer like addon
+users, 0.5-3 s after the real probe goes out, and wear a full crest on
+nameplates, unit frames, tooltips and chat (whatever their PvP flag).
+Everything else stays real: probes, the send budget, queue order, timeouts
+and the saved and shared no-addon list. It turns debug on and prints the
+coverage line every 15 s, so you can watch a crowd fill in at real speed.
+
+- Who answers is a fixed hash of the player's GUID, not a random roll: every
+  tester with the same N sees the same simulated users, with nothing to sync.
+- Testers share simulated finds with each other as `FS|1|…` on the realm
+  channel. A tester only accepts one if their own hash agrees; players not
+  simulating (and older builds) ignore `FS`.
+- Simulated users are never saved, never posted as real `F` finds, and a
+  shared no-addon list can't hide them.
+- `/honor sim off` removes simulated crests and keeps everything learned for
+  real. `/honor sim` prints the coverage line.
 
 ## Development and validation
 
@@ -159,4 +185,5 @@ The distributable addon is in `HonorBound/`; the vector artwork is in
 Run `lua tests/run.lua` or `luajit tests/run.lua` from this directory. The
 simulated-client tests cover the protocol, the oath, grace and breaking,
 peer flag checks, crest placement, nameplates, settings, whisper probes, realm
-sharing and same-realm queries. They don't replace testing in game.
+sharing, same-realm queries, chat crests and simulation. They don't replace
+testing in game.

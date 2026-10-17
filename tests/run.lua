@@ -48,6 +48,7 @@ function methods:SetPoint(...) self.point = {...} end
 function methods:ClearAllPoints() self.point = nil end
 function methods:SetScale(n) self.scale = n end
 function methods:SetAlpha(n) self.alpha = n end
+function methods:SetDesaturated(v) self.desaturated = v end
 function methods:SetShown(value) self.shown = value and true or false end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
@@ -99,6 +100,7 @@ function GetPlayerInfoByGUID(guid)
     local p = players[guid]
     if p then return "Warrior", "WARRIOR", "Orc", "Orc", 2, p.name, p.realm end
 end
+ChatFrameUtil = { AddSenderNameFilter = function(f) ChatFrameUtil.filter = f end, RemoveSenderNameFilter = function() end }
 ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
 function ChatFrame_AddMessageEventFilter(event, filter) systemFilters[event] = filter end
 function UnitGUID(unit) return units[unit] and units[unit].guid end
@@ -416,4 +418,91 @@ local horde = chatName(function() return "Horde" end, "Bob")
 check(horde == "|TInterface\\AddOns\\HonorBound\\Media\\CrestHorde.tga:0:0|t Bob", "chat uses the Horde crest")
 check(chatName(function() return "Alliance" end, "Bob"):find("CrestAlliance.tga", 1, true), "chat uses the Alliance crest")
 check(chatName(function() return "Horde" end, horde) == nil, "chat crest is not added twice")
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries and chat crests.")
+
+-- Simulation: a fixed share of probed players answers as addon users.
+local function chatCrest(guid, name)
+    local args = {}
+    args[12] = guid
+    return ChatFrameUtil.filter("CHAT_MSG_SAY", name, unpack(args, 1, 12))
+end
+local function probeSent(name)
+    for _ = 1, 15 do
+        if #whispers(name) > 0 then return true end
+        advance(1)
+    end
+end
+local crest = plate.UnitFrame.HonorBoundCrest
+advance(200)
+sent = {}
+SlashCmdList.HONORBOUND("sim 100")
+local simmed = "Player-99-5AA001"
+units.nameplate1 = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(probeSent("Simmy-OtherRealm"), "simulation still sends the real probe")
+check(crest.shown and crest.desaturated and crest.alpha == 0.35, "faint grey crest while the probe is waiting")
+advance(4)
+check(crest.shown and not crest.desaturated and crest.alpha == 1, "simulated user gets a full crest within 3 s")
+units.target = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
+event("PLAYER_TARGET_CHANGED")
+check(targetBadge().shown, "simulated user's crest shows on the target frame without a PvP flag")
+local simChat = chatCrest(simmed, "Simmy")
+check(simChat and simChat:find("CrestHorde.tga", 1, true), "simulated user's crest shows in chat")
+check(HonorBoundDB.likely[simmed] == nil, "simulated users are never saved")
+advance(12)
+check(#channelPosts("FS|1|", simmed) == 1 and #channelPosts("F|1|", simmed) == 0, "simulated finds go out as tester-only FS, never F")
+check(A.SimHash(simmed) == A.SimHash(simmed) and A.SimHash(simmed) >= 0 and A.SimHash(simmed) < 100, "fixed verdict per player")
+local under = 0
+for i = 1, 2000 do if A.SimHash(("Player-99-%08X"):format(i * 7919)) < 10 then under = under + 1 end end
+check(under > 120 and under < 280, "about 10% of players fall under 10 (" .. under .. ")")
+
+-- Another tester's FS: taken only when our own hash agrees.
+local relayedSim = "Player-99-5AA002"
+shared("FS|1|" .. relayedSim .. "|Relay-OtherRealm|1|0|sim")
+units.nameplate1 = { guid = relayedSim, flagged = false, faction = "Horde", name = "Relay", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+advance(5)
+check(crest.shown and not crest.desaturated and #whispers("Relay-OtherRealm") == 0, "another tester's FS gives a crest without a probe")
+-- An N list never hides a player we're simulating.
+local listed = "Player-99-5AA003"
+shared("N|1|" .. listed:sub(8))
+check(HonorBoundDB.noAddon[listed] == nil, "shared no-addon list can't hide a simulated user")
+
+-- 0%: no fakes, and the no-addon path is exactly the real one.
+sent = {}
+SlashCmdList.HONORBOUND("sim 0")
+local plain = "Player-99-5AA004"
+shared("FS|1|" .. plain .. "|Plain-OtherRealm|1|0|sim")
+units.nameplate1 = { guid = plain, flagged = false, faction = "Horde", name = "Plain", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(probeSent("Plain-OtherRealm"), "FS for a player our hash rejects is ignored, so we probe")
+advance(31)
+check(crest.shown and crest.desaturated and crest.alpha == 0.8, "solid grey once marked no-addon")
+check(HonorBoundDB.noAddon[plain], "no-addon still saved while simulating")
+advance(45)
+check(#channelPosts("N|1|", plain:sub(8)) == 1, "no-addon still shared while simulating")
+
+-- Off: simulated crests go, real knowledge stays.
+SlashCmdList.HONORBOUND("sim 100")
+units.nameplate1 = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+advance(1)
+SlashCmdList.HONORBOUND("sim off")
+check(not crest.shown, "sim off removes simulated crests")
+check(HonorBoundDB.noAddon[plain], "sim off keeps saved no-addon entries")
+sent = {}
+shared("FS|1|" .. relayedSim .. "|Relay-OtherRealm|1|0|sim")
+check(#sent == 0, "clients not simulating ignore FS")
+
+-- Same budget with or without simulation.
+local function crowdWhispers(percent)
+    SlashCmdList.HONORBOUND(percent and ("sim " .. percent) or "sim off")
+    advance(30)
+    sent = {}
+    for i = 1, 60 do say(("C%d-OtherRealm"):format(i), ("Player-98-%06X"):format((percent or 7) * 1000 + i)) end
+    advance(60)
+    return #whispers()
+end
+local off, on = crowdWhispers(nil), crowdWhispers(100)
+check(on <= 5 + 60 / 2 and on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
+SlashCmdList.HONORBOUND("sim off")
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests and simulation.")

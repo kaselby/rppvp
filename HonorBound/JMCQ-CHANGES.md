@@ -80,3 +80,15 @@ their own realm's hidden channel, so nobody else on that realm has to ask.
 - Saved oaths don't carry over by themselves: copy WTF/.../SavedVariables/
   BadgeOfHonor.lua to HonorBound.lua (both the account and each character's
   folder) and rename BadgeOfHonorDB/BadgeOfHonorCharDB inside, with WoW closed.
+
+# 0.3.1: simulation and debug overlay
+
+- /honor sim N: N% of the players you ask answer as addon users 0.5-3 s after
+  the real probe, with a full crest on nameplates, unit frames, tooltips and
+  chat. Probes, budget, timeouts and the no-addon list stay real. Who answers
+  is a fixed GUID hash, so testers with the same N see the same players.
+  Testers share simulated finds as FS (ignored by everyone not simulating).
+- Debug overlay: faint grey crest while a player is being asked, solid grey
+  once marked no-addon.
+- Coverage line (every minute, every 15 s while simulating): nameplates by
+  state and average seen-to-probe / seen-to-answer / seen-to-no-addon times.

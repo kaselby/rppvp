@@ -2,7 +2,7 @@
 ## Title: HonorBound
 ## Notes: A community crest for players sworn to RP-PvP. Keeps you flagged and shows the crest on sworn players.
 ## Author: ModeratelyAware
-## Version: 0.3.0
+## Version: 0.3.1
 ## SavedVariables: HonorBoundDB
 ## SavedVariablesPerCharacter: HonorBoundCharDB
 
