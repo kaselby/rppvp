@@ -1,0 +1,1164 @@
+-- HonorBound: a community crest for players sworn to RP-PvP.
+--
+-- The oath. Each character swears once. A sworn character stays flagged for
+-- PvP: once flagged, /pvp is replaced and "Disable" in the portrait menu is
+-- greyed out (Blizzard won't let addons set the flag, only stop you clearing
+-- it). If something unflags you anyway, you get GRACE seconds to reflag
+-- before the oath breaks. A broken oath can be sworn again with /honor swear.
+--
+-- The badge. Your crest shows only while you're sworn and flagged. Other
+-- players' crests need both their sworn broadcast and the server's live flag
+-- (UnitIsPVP), so an unflagged player never wears one.
+local _, A = ...
+local MEDIA = "Interface\\AddOns\\HonorBound\\Media\\"
+local eventFrame = CreateFrame("Frame")
+local db, char, myGUID, myServer, lastAnnounce, lastPayload, lastPledgePayload
+local peers, queries, widgets, plates = {}, {}, {}, {}
+local lastQuery, lastAnswer, lastJoin, lastMinute = -100, -100, -100, 0
+local guarded, deadline, prompt, promptAfterCombat
+local Refresh, Announce, UpdatePrompt, RefreshPlate
+
+local function Print(text)
+    DEFAULT_CHAT_FRAME:AddMessage("|cffffd479HonorBound:|r " .. text)
+end
+-- Session-only diagnostics: no extra network traffic or saved logs.
+-- "on" shows broadcasts, channel shares and a summary a minute; "verbose"
+-- adds every whisper probe and reply.
+local debugEnabled, debugVerbose = false, false
+local function Debug(text, verbose)
+    if debugEnabled and (debugVerbose or not verbose) then
+        Print(("[debug %.0fs] "):format(GetTime()) .. text)
+    end
+end
+local function Secret(value)
+    return issecretvalue and issecretvalue(value)
+end
+local function GUID(unit)
+    local value = UnitGUID(unit)
+    if Secret(value) or not A.ValidGUID(value) then return end
+    return value
+end
+local function Desired()
+    return GetPVPDesired() and true or false
+end
+local function Flagged(unit)
+    local value = UnitIsPVP(unit)
+    if Secret(value) then return false end
+    return value and true or false
+end
+local function Faction(unit)
+    local faction = UnitFactionGroup(unit)
+    if Secret(faction) or (faction ~= "Alliance" and faction ~= "Horde") then return "Alliance" end
+    return faction
+end
+-- Chat senders aren't units: read the faction from their race, falling back
+-- to our own (whispers and most chat don't cross factions anyway).
+local RACE_FACTION = {
+    Human = "Alliance", Dwarf = "Alliance", NightElf = "Alliance", Gnome = "Alliance",
+    Draenei = "Alliance", Worgen = "Alliance", VoidElf = "Alliance", LightforgedDraenei = "Alliance",
+    DarkIronDwarf = "Alliance", KulTiran = "Alliance", Mechagnome = "Alliance",
+    Orc = "Horde", Scourge = "Horde", Tauren = "Horde", Troll = "Horde", BloodElf = "Horde",
+    Goblin = "Horde", Nightborne = "Horde", HighmountainTauren = "Horde", MagharOrc = "Horde",
+    ZandalariTroll = "Horde", Vulpera = "Horde",
+}
+local function ChatFaction(guid)
+    if guid ~= UnitGUID("player") and GetPlayerInfoByGUID then
+        local _, _, _, race = GetPlayerInfoByGUID(guid)
+        if not Secret(race) and RACE_FACTION[race] then return RACE_FACTION[race] end
+    end
+    return Faction("player")
+end
+local function Sworn()
+    return char and char.sworn and Desired()
+end
+local function FormatTime(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    return ("%d:%02d"):format(math.floor(seconds / 60), seconds % 60)
+end
+
+---------------------------------------------------------------------------
+-- Sharing status over the hidden channel and group addon messages.
+
+local function ChannelID()
+    local id = GetChannelName(A.CHANNEL)
+    if type(id) == "number" and id > 0 then return id end
+end
+-- One budget for every send. Announcements always go out but still spend;
+-- queries and whisper probes wait until there's room. Sustained use stays
+-- at half the server's roughly one-message-a-second allowance per prefix.
+local TOKEN_MAX, TOKEN_RATE = 5, 0.5
+local tokens, tokenTime = TOKEN_MAX, 0
+local function Refill()
+    local now = GetTime()
+    tokens = math.min(TOKEN_MAX, tokens + (now - tokenTime) * TOKEN_RATE)
+    tokenTime = now
+end
+local function Afford(cost)
+    Refill()
+    return tokens >= cost
+end
+local function Send(message, route, target)
+    Refill()
+    tokens = math.max(-TOKEN_MAX, tokens - 1)
+    local result = C_ChatInfo.SendAddonMessage(A.PREFIX, message, route, target)
+    -- The server pushed back: stop optional traffic for a few seconds.
+    if not (result == true or result == 0) then tokens = math.min(tokens, -2) end
+    if debugEnabled then
+        local ok = result == true or result == 0
+        -- Failed whispers always show; accepted ones only in verbose.
+        Debug("TX " .. route .. (target and ("/" .. target) or "") .. " " .. message
+            .. " -> " .. (ok and "accepted" or "FAILED") .. " (API result " .. tostring(result) .. ")",
+            ok and route == "WHISPER")
+    end
+    return result == true or result == 0
+end
+local function GroupRoute()
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
+    if IsInRaid() then return "RAID" end
+    if IsInGroup() then return "PARTY" end
+end
+local function PledgePayload()
+    return A.EncodePledge(myGUID or "", Sworn() and A.PledgeLevel(char))
+end
+local lastPledgePayload
+Announce = function(force)
+    if not db or not myGUID then return end
+    local now = GetTime()
+    local payload = A.Encode(myGUID, Sworn())
+    local pledgePayload = PledgePayload()
+    -- Include metadata changes in the existing announcement throttle.
+    local unchanged = payload == lastPayload and pledgePayload == lastPledgePayload
+    -- Keep repeated world/group events from flooding the channel,
+    -- but let a changed oath through straight away.
+    if unchanged and lastAnnounce and now - lastAnnounce < 3 then return end
+    if not force and unchanged and lastAnnounce and now - lastAnnounce < 60 then return end
+    Debug("Broadcast attempt; pledged=" .. tostring(Sworn() and true or false))
+    local sent = false
+    local channel = ChannelID()
+    if channel then
+        local statusSent = Send(payload, "CHANNEL", tostring(channel))
+        local pledgeSent = Send(pledgePayload, "CHANNEL", tostring(channel))
+        sent = (statusSent and pledgeSent) or sent
+    end
+    local route = GroupRoute()
+    if route then
+        local statusSent = Send(payload, route)
+        local pledgeSent = Send(pledgePayload, route)
+        sent = (statusSent and pledgeSent) or sent
+    end
+    if IsInGuild() then
+        local statusSent = Send(payload, "GUILD")
+        local pledgeSent = Send(pledgePayload, "GUILD")
+        sent = (statusSent and pledgeSent) or sent
+    end
+    if sent then lastAnnounce, lastPayload, lastPledgePayload = now, payload, pledgePayload end
+end
+local function JoinChannel()
+    if not db or GetTime() - lastJoin < 30 then return end
+    lastJoin = GetTime()
+    if ChannelID() then Announce(true) return end
+    local join = JoinTemporaryChannel or JoinPermanentChannel
+    if join then join(A.CHANNEL) end
+    C_Timer.After(2, function()
+        if ChatFrame_RemoveChannel then
+            for i = 1, NUM_CHAT_WINDOWS or 10 do
+                local frame = _G["ChatFrame" .. i]
+                if frame then ChatFrame_RemoveChannel(frame, A.CHANNEL) end
+            end
+        end
+        Announce(true)
+    end)
+end
+---------------------------------------------------------------------------
+-- Whisper probes: players from other realms can't hear our hidden channel,
+-- so ask the ones we actually meet (mouseover, nameplate, chat) directly.
+-- A probe carries our own status, so the other side learns us from it and
+-- never needs to probe back. One reply completes the exchange.
+--
+-- Realm sharing: whatever one of us learns about another realm's players is
+-- posted once on our own realm's channel, so nobody else here has to ask.
+-- Finds ("F") go out after a short random wait unless someone beat us to it;
+-- players without the addon ("N") go out in small batches, and the more
+-- of us there are, the less often each one posts.
+
+local PROBE_TIMEOUT = 30         -- no reply by then: treat as no addon
+local PROBE_STALE = 30           -- queued this long without sending: drop
+local NO_ADDON = 7200            -- our own silent probe: don't ask for 2 hours
+local NO_ADDON_SHARED = 1800     -- someone else's: 30 minutes
+local LIKELY_KEEP = 14 * 86400   -- remember addon users for two weeks
+local REPROBE_AFTER = A.TTL - 30 -- refresh peers still in view before they expire
+local QUEUE_MAX, REPLY_MAX, REPLY_GAP = 40, 20, 60
+local SHARE_WAIT, SHARE_STALE, SHARE_REFRESH = {2, 10}, 60, 150
+local NO_BATCH, NO_GAP, NO_MAX = 15, {20, 40}, 60
+-- Lower sends first: known addon users, mouseover/target, chat, nameplates.
+local PRIORITY_LIKELY, PRIORITY_UNIT, PRIORITY_CHAT, PRIORITY_PLATE = 0, 1, 2, 3
+local probes, probeCount, pending, replies, replied = {}, 0, {}, {}, {}
+local noAddon, likely = {}, {}  -- saved; keyed by GUID, times from time()
+local names, jitter, heard, shares = {}, {}, {}, {}
+local unsharedNo, nextNoPost, sharingPausedUntil = {}, 0, 0
+-- Same-realm players asked on the channel and not yet heard from.
+local ASK_TIMEOUT = 10
+local asking = {}
+local stats = {asked = 0, askedSilent = 0, probed = 0, answered = 0, silent = 0, unreachable = 0,
+    sharedF = 0, sharedN = 0, heardF = 0, heardN = 0}
+
+local function Server(guid)
+    return guid and guid:match("^Player%-(%d+)%-")
+end
+local function OtherRealm(guid)
+    return myServer and Server(guid) ~= myServer
+end
+local function Locked()
+    return C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown()
+end
+local function Between(range)
+    return range[1] + math.random() * (range[2] - range[1])
+end
+-- Whisper targets need Name-Realm, with the realm's spaces and dashes removed.
+local function FullName(name, realm)
+    if Secret(name) or Secret(realm) or type(name) ~= "string" or name == "" then return end
+    if type(realm) == "string" and realm ~= "" and not name:find("-", 1, true) then
+        name = name .. "-" .. realm:gsub("[%s%-]", "")
+    end
+    return name
+end
+local function GuidName(guid)
+    if not GetPlayerInfoByGUID then return end
+    local _, _, _, _, _, name, realm = GetPlayerInfoByGUID(guid)
+    return FullName(name, realm)
+end
+local function ValidName(name)
+    return type(name) == "string" and #name <= 64 and name:match("^[^%-|]+%-[^%-|]+$") ~= nil
+end
+local function DecodeStatus(sworn, raw, version)
+    local level = tonumber(raw)
+    if not level or level > 60 then return end
+    return {sworn = sworn == "1", version = version, pledgedSinceLevel = level > 0 and level or nil}
+end
+local function WhisperPayload(kind)
+    local level = Sworn() and A.PledgeLevel(char) or 0
+    return ("W%s|1|%s|%d|%d|%s"):format(kind, myGUID, Sworn() and 1 or 0, level, A.VERSION)
+end
+local function DecodeWhisper(message)
+    local kind, guid, sworn, raw, version = message:match("^W([QR])|1|([^|]+)|([01])|(%d+)|([%w%.%-]+)$")
+    if not A.ValidGUID(guid) then return end
+    local peer = DecodeStatus(sworn, raw, version)
+    if peer then return kind, guid, peer end
+end
+local function FoundPayload(guid, name, peer)
+    return ("F|1|%s|%s|%d|%d|%s"):format(guid, name, peer.sworn and 1 or 0,
+        peer.pledgedSinceLevel or 0, peer.version or "?")
+end
+-- Same status as the last one shared for this player?
+local function SameStatus(record, peer)
+    return record and record.sworn == peer.sworn and record.level == (peer.pledgedSinceLevel or 0)
+end
+
+local function Probe(guid, priority, name)
+    local now = GetTime()
+    local peer = peers[guid]
+    -- Spread re-probes so a whole realm doesn't refresh the same player at once.
+    jitter[guid] = jitter[guid] or math.random(0, 60)
+    if peer and now - peer.seen < REPROBE_AFTER + jitter[guid] then return end
+    if pending[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
+    if likely[guid] then priority = PRIORITY_LIKELY end
+    name = name or names[guid] or (likely[guid] and likely[guid].name)
+    local entry = probes[guid]
+    if entry then
+        entry.priority = math.min(entry.priority, priority)
+        entry.name = entry.name or name
+        return
+    end
+    if probeCount >= QUEUE_MAX then
+        -- Full: a more urgent probe displaces the least urgent, oldest one.
+        local worst, worstEntry
+        for queued, e in pairs(probes) do
+            if not worstEntry or e.priority > worstEntry.priority
+                or (e.priority == worstEntry.priority and e.at < worstEntry.at) then
+                worst, worstEntry = queued, e
+            end
+        end
+        if worstEntry.priority <= priority then return end
+        probes[worst], probeCount = nil, probeCount - 1
+    end
+    probes[guid], probeCount = {priority = priority, at = now, name = name}, probeCount + 1
+end
+local function Unqueue(guid)
+    if probes[guid] then probes[guid], probeCount = nil, probeCount - 1 end
+end
+-- Same-realm players hear the channel: ask there. Anyone else gets a probe.
+local function Query(guid, priority, name)
+    if not guid or not myGUID or guid == myGUID then return end
+    if OtherRealm(guid) then return Probe(guid, priority or PRIORITY_PLATE, name) end
+    -- Ask each same-realm stranger once; silence puts them on the list.
+    if asking[guid] or (noAddon[guid] and time() < noAddon[guid]) then return end
+    local now = GetTime()
+    if now - lastQuery < 1 then return end
+    if peers[guid] and now - peers[guid].seen < 60 then return end
+    if queries[guid] and now - queries[guid] < 15 then return end
+    local id, route = ChannelID(), GroupRoute()
+    local cost = (id and 1 or 0) + (route and 1 or 0) + (IsInGuild() and 1 or 0)
+    if cost == 0 or not Afford(cost) then return end
+    local message = "Q|1|" .. guid
+    local sent = false
+    if id then sent = Send(message, "CHANNEL", tostring(id)) or sent end
+    if route then sent = Send(message, route) or sent end
+    if IsInGuild() then sent = Send(message, "GUILD") or sent end
+    if sent then
+        queries[guid], lastQuery, asking[guid] = now, now, now
+        stats.asked = stats.asked + 1
+    end
+end
+local function QueryUnit(unit, priority)
+    local guid = GUID(unit)
+    if not guid or guid == myGUID or not UnitIsPlayer(unit) then return end
+    if OtherRealm(guid) then
+        -- Whispers can't cross factions; skip anyone we couldn't reach anyway.
+        local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+        if Secret(theirs) or Secret(ours) or theirs ~= ours then return end
+    end
+    Query(guid, priority, FullName(UnitName(unit)))
+end
+
+-- A player from another realm confirmed by us: tell our realm, unless the
+-- news is already out.
+local function ShareFound(guid, name, peer)
+    if not OtherRealm(guid) or not ValidName(name) then return end
+    local record = heard[guid]
+    if SameStatus(record, peer) and GetTime() - record.at < SHARE_REFRESH then return end
+    if shares[guid] then return end
+    shares[guid] = {due = GetTime() + Between(SHARE_WAIT), payload = FoundPayload(guid, name, peer), peer = peer}
+end
+local function MarkNoAddon(guid, why)
+    noAddon[guid] = time() + NO_ADDON
+    likely[guid] = nil
+    if OtherRealm(guid) and #unsharedNo < NO_MAX then
+        -- Start a batch: collect for a while before posting.
+        if #unsharedNo == 0 then nextNoPost = math.max(nextNoPost, GetTime() + Between(NO_GAP)) end
+        unsharedNo[#unsharedNo + 1] = guid
+    end
+    stats[why] = stats[why] + 1
+end
+
+-- At most one whisper a second, and only while the shared budget allows.
+-- Replies go first: someone is waiting on them.
+local function PumpWhispers(now)
+    for guid, p in pairs(pending) do
+        if now - p.at > PROBE_TIMEOUT then
+            pending[guid] = nil
+            MarkNoAddon(guid, "silent")
+            Debug("Probe " .. p.name .. ": no reply", true)
+        end
+    end
+    while replies[1] and now - replies[1].at > PROBE_STALE do table.remove(replies, 1) end
+    if not Afford(1) then return end
+    local reply = table.remove(replies, 1)
+    if reply then
+        replied[reply.name] = now
+        Send(WhisperPayload("R"), "WHISPER", reply.name)
+        return
+    end
+    -- Most urgent first; ties broken at random so players on the same realm
+    -- spread out over a crowd instead of all asking the same stranger.
+    local best, bestEntry, ties = nil, nil, 0
+    for guid, e in pairs(probes) do
+        if now - e.at > PROBE_STALE then
+            probes[guid], probeCount = nil, probeCount - 1
+        elseif not bestEntry or e.priority < bestEntry.priority then
+            best, bestEntry, ties = guid, e, 1
+        elseif e.priority == bestEntry.priority then
+            ties = ties + 1
+            if math.random(ties) == 1 then best, bestEntry = guid, e end
+        end
+    end
+    if not best then return end
+    Unqueue(best)
+    local name = bestEntry.name or GuidName(best)
+    if not name then return end -- not resolvable yet; the next sighting re-queues
+    pending[best] = {at = now, name = name}
+    stats.probed = stats.probed + 1
+    Send(WhisperPayload("Q"), "WHISPER", name)
+end
+-- Channel posts are optional: they wait for spare budget and back off when
+-- the server pushes back.
+local function PumpShares(now)
+    local id = ChannelID()
+    if not id or now < sharingPausedUntil then return end
+    for guid, s in pairs(shares) do
+        if now - s.due > SHARE_STALE then shares[guid] = nil end
+    end
+    if not Afford(2) then return end
+    for guid, s in pairs(shares) do
+        if now >= s.due then
+            shares[guid] = nil
+            heard[guid] = {at = now, sworn = s.peer.sworn, level = s.peer.pledgedSinceLevel or 0}
+            stats.sharedF = stats.sharedF + 1
+            if not Send(s.payload, "CHANNEL", tostring(id)) then sharingPausedUntil = now + 120 end
+            return
+        end
+    end
+    if #unsharedNo == 0 or now < nextNoPost then return end
+    local batch = {}
+    while #batch < NO_BATCH and unsharedNo[1] do
+        batch[#batch + 1] = table.remove(unsharedNo, 1):sub(8) -- drop "Player-"
+    end
+    nextNoPost = now + Between(NO_GAP)
+    stats.sharedN = stats.sharedN + 1
+    if not Send("N|1|" .. table.concat(batch, ","), "CHANNEL", tostring(id)) then
+        sharingPausedUntil = now + 120
+    end
+end
+local function PumpProbes()
+    local now = GetTime()
+    for guid, at in pairs(asking) do
+        if now - at > ASK_TIMEOUT then
+            asking[guid] = nil
+            MarkNoAddon(guid, "askedSilent")
+        end
+    end
+    if Locked() or not myGUID then return end
+    PumpWhispers(now)
+    PumpShares(now)
+end
+
+local function OnWhisper(message, sender)
+    if Secret(sender) or type(sender) ~= "string" then return end
+    local kind, guid, peer = DecodeWhisper(message)
+    if not kind or guid == myGUID then return end
+    -- The status claims a GUID; it must belong to whoever sent it.
+    local known = GuidName(guid)
+    if known and known:match("^[^%-]+") ~= sender:match("^[^%-]+") then return end
+    Debug("RX WHISPER/" .. sender .. " " .. message, true)
+    local now = GetTime()
+    peers[guid] = A.MergePledgePeer(peers[guid], peer, now, true)
+    noAddon[guid] = nil
+    local probed = pending[guid]
+    pending[guid] = nil
+    if probed then stats.answered = stats.answered + 1 end
+    -- Senders can arrive without a realm; prefer a full Name-Realm.
+    local name = (probed and probed.name) or known or sender
+    if ValidName(name) then likely[guid] = {name = name, seen = time()} end
+    Unqueue(guid)
+    ShareFound(guid, name, peer)
+    -- If our probe already reached them they have our status; otherwise answer.
+    local queued = false
+    for _, r in ipairs(replies) do queued = queued or r.name == name end
+    if kind == "Q" and not probed and not queued and #replies < REPLY_MAX
+        and not (replied[name] and now - replied[name] < REPLY_GAP) then
+        replies[#replies + 1] = {name = name, at = now}
+    end
+    Refresh()
+end
+-- Shared on our channel by someone on our realm.
+local function OnShare(message)
+    local guid, name, sworn, raw, version = message:match("^F|1|([^|]+)|([^|]+)|([01])|(%d+)|([%w%.%-?]+)$")
+    if guid then
+        local peer = A.ValidGUID(guid) and guid ~= myGUID and ValidName(name) and DecodeStatus(sworn, raw, version)
+        if not peer then return true end
+        local now = GetTime()
+        stats.heardF = stats.heardF + 1
+        heard[guid] = {at = now, sworn = peer.sworn, level = peer.pledgedSinceLevel or 0}
+        -- Someone beat us to it: drop our own copy if it says the same thing.
+        if shares[guid] and SameStatus(heard[guid], shares[guid].peer) then shares[guid] = nil end
+        -- A direct answer outranks a relay.
+        local current = peers[guid]
+        if not (current and not current.relayed and now - current.seen < A.TTL) then
+            peer.relayed = true
+            peers[guid] = A.MergePledgePeer(current, peer, now, true)
+        end
+        names[guid], noAddon[guid] = name, nil
+        likely[guid] = {name = name, seen = time()}
+        Unqueue(guid)
+        Refresh()
+        return true
+    end
+    local list = message:match("^N|1|([%x%-,]+)$")
+    if not list then return end
+    stats.heardN = stats.heardN + 1
+    local expires = time() + NO_ADDON_SHARED
+    local now = GetTime()
+    local seen = {}
+    for id in list:gmatch("[^,]+") do
+        local guid = "Player-" .. id
+        if A.ValidGUID(guid) then
+            seen[guid] = true
+            local peer = peers[guid]
+            -- Never let a relay hide a player we know has the addon.
+            if not likely[guid] and not (peer and now - peer.seen < A.TTL) then
+                noAddon[guid] = math.max(noAddon[guid] or 0, expires)
+                Unqueue(guid)
+            end
+        end
+    end
+    -- Already said by someone else: no need for us to say it again.
+    for i = #unsharedNo, 1, -1 do
+        if seen[unsharedNo[i]] then table.remove(unsharedNo, i) end
+    end
+    nextNoPost = math.max(nextNoPost, now + Between(NO_GAP))
+    return true
+end
+
+-- A probe to someone unreachable comes back as a system error; hide it.
+local function HideUnreachable(_, _, message)
+    if Secret(message) or type(message) ~= "string" or not ERR_CHAT_PLAYER_NOT_FOUND_S then return end
+    for guid, p in pairs(pending) do
+        if message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(p.name) then
+            pending[guid] = nil
+            MarkNoAddon(guid, "unreachable")
+            Debug("Probe " .. p.name .. ": unreachable", true)
+            return true
+        end
+    end
+    local now = GetTime()
+    for name, at in pairs(replied) do
+        if now - at < 5 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then return true end
+    end
+end
+-- Load the saved caches, dropping anything expired or malformed.
+local function LoadCaches()
+    local now = time()
+    db.noAddon = type(db.noAddon) == "table" and db.noAddon or {}
+    db.likely = type(db.likely) == "table" and db.likely or {}
+    for guid, expires in pairs(db.noAddon) do
+        if not A.ValidGUID(guid) or type(expires) ~= "number" or expires <= now then db.noAddon[guid] = nil end
+    end
+    for guid, entry in pairs(db.likely) do
+        if not A.ValidGUID(guid) or type(entry) ~= "table" or not ValidName(entry.name)
+            or type(entry.seen) ~= "number" or now - entry.seen > LIKELY_KEEP then
+            db.likely[guid] = nil
+        end
+    end
+    noAddon, likely = db.noAddon, db.likely
+end
+local function PruneCaches()
+    local now = time()
+    for guid, expires in pairs(noAddon) do
+        if now >= expires then noAddon[guid] = nil end
+    end
+    local clock = GetTime()
+    for name, at in pairs(replied) do
+        if clock - at > REPLY_GAP then replied[name] = nil end
+    end
+    for guid, record in pairs(heard) do
+        if clock - record.at > A.TTL then heard[guid] = nil end
+    end
+end
+-- One line a minute instead of a line per stranger.
+local function DebugSummary()
+    if stats.asked + stats.probed + stats.sharedF + stats.sharedN + stats.heardF + stats.heardN == 0 then return end
+    Debug(("Last minute: asked %d on realm (%d silent); probed %d, answered %d, no reply %d, unreachable %d; shared %d finds, %d no-addon lists; heard %d finds, %d lists; queued %d")
+        :format(stats.asked, stats.askedSilent, stats.probed, stats.answered, stats.silent, stats.unreachable,
+            stats.sharedF, stats.sharedN, stats.heardF, stats.heardN, probeCount))
+    for key in pairs(stats) do stats[key] = 0 end
+end
+-- Whether a unit wears the badge right now.
+local function Status(unit)
+    local guid = GUID(unit)
+    if not guid then return end
+    if guid == myGUID then
+        if char and char.sworn and Flagged("player") then return { version = A.VERSION } end
+        return
+    end
+    if UnitIsPlayer(unit) then
+        QueryUnit(unit, unit:find("^nameplate") and PRIORITY_PLATE or PRIORITY_UNIT)
+    end
+    local peer = peers[guid]
+    if peer and peer.sworn and GetTime() - peer.seen < A.TTL and Flagged(unit) then return peer end
+end
+
+---------------------------------------------------------------------------
+-- The oath
+
+local function GreyOutDisable()
+    if not UnitPopupPvpDisableButtonMixin then return false end
+    UnitPopupPvpDisableButtonMixin.IsEnabled = function() return false end
+    return true
+end
+-- Removes the ways to unflag. Only call while flagged: afterwards /pvp
+-- can't flag you either until /reload.
+local function Guard()
+    if guarded then return end
+    guarded = true
+    SlashCmdList.PVP = function()
+        if Desired() then
+            Print("You're sworn to RP-PvP; unflagging is disabled.")
+        else
+            Print("To flag, right-click your portrait and choose PvP > Enable.")
+        end
+    end
+    if not GreyOutDisable() then eventFrame:RegisterEvent("ADDON_LOADED") end
+end
+local function Swear()
+    A.StartPledge(char, UnitLevel("player"))
+    char.sworn, char.joining, char.declined, char.graceLeft = true, nil, nil, nil
+    deadline = nil
+    Guard()
+    Print("You've sworn the oath. Your crest shows to the community while you stay flagged.")
+    Announce(true)
+    Refresh()
+end
+local function Break(reason)
+    if not char.sworn then return end
+    char.pledgedSinceLevel = nil
+    char.sworn, char.joining, char.graceLeft = false, nil, nil
+    deadline = nil
+    Print("Oath broken (" .. reason .. "). Your crest is gone. Type /honor swear to take it again.")
+    if guarded then Print("Unflagging stays blocked until you /reload.") end
+    Announce(true)
+    Refresh()
+end
+
+---------------------------------------------------------------------------
+-- The prompt: a secure button runs the real /pvp from your click.
+
+local function CreatePrompt()
+    local f = CreateFrame("Frame", "HonorBoundPrompt", UIParent, "BackdropTemplate")
+    f:SetSize(380, 196)
+    f:SetPoint("CENTER", 0, 180)
+    f:SetFrameStrata("DIALOG")
+    f:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    })
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self) if not InCombatLockdown() then self:StartMoving() end end)
+    f:SetScript("OnDragStop", function(self) if not InCombatLockdown() then self:StopMovingOrSizing() end end)
+    f:Hide()
+
+    f.header = f:CreateTexture(nil, "ARTWORK")
+    f.header:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
+    f.header:SetSize(300, 64)
+    f.header:SetPoint("TOP", 0, 12)
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.title:SetPoint("TOP", f.header, "TOP", 0, -14)
+    f.title:SetText("HonorBound")
+    f.icon = f:CreateTexture(nil, "ARTWORK")
+    f.icon:SetSize(72, 72)
+    f.icon:SetPoint("TOPLEFT", 20, -34)
+    f.oath = f:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    f.oath:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, -6)
+    f.oath:SetWidth(258)
+    f.oath:SetJustifyH("LEFT")
+    f.oath:SetText("\"I fight under the open sky.\"")
+    f.text = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    f.text:SetPoint("TOPLEFT", f.oath, "BOTTOMLEFT", 0, -8)
+    f.text:SetWidth(258)
+    f.text:SetJustifyH("LEFT")
+
+    local flag = CreateFrame("Button", "HonorBoundFlagButton", f, "SecureActionButtonTemplate,UIPanelButtonTemplate")
+    flag:SetSize(160, 26)
+    flag:SetPoint("BOTTOMLEFT", 22, 18)
+    flag:RegisterForClicks("LeftButtonUp")
+    -- Without this, "cast on key down" players get no action from a mouse-up click.
+    flag:SetAttribute("useOnKeyDown", false)
+    flag:SetAttribute("type", "macro")
+    flag:SetAttribute("macrotext", SLASH_PVP1 or "/pvp")
+    flag:HookScript("PreClick", function()
+        if char and not char.sworn then char.joining = true end
+    end)
+    -- /pvp toggles, so a second click would unflag again. Disarm after one.
+    flag:HookScript("PostClick", function(self)
+        if not InCombatLockdown() then
+            self:SetAttribute("type", nil)
+            self.disarmedAt = GetTime()
+        end
+    end)
+    f.flag = flag
+
+    -- Already flagged: swearing needs no secure action.
+    local swear = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    swear:SetSize(160, 26)
+    swear:SetPoint("BOTTOMLEFT", 22, 18)
+    swear:SetText("Swear the oath")
+    swear:SetScript("OnClick", function() Swear() UpdatePrompt() end)
+    swear:Hide()
+    f.swear = swear
+
+    local no = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    no:SetSize(130, 26)
+    no:SetPoint("BOTTOMRIGHT", -22, 18)
+    no:SetText("Not now")
+    no:SetScript("OnClick", function()
+        if char and not char.sworn then
+            char.declined, char.joining = true, nil
+            Print("Not now. Type /honor swear whenever you're ready.")
+            UpdatePrompt()
+        end
+    end)
+    f.no = no
+
+    f.elapsed = 0
+    f:SetScript("OnUpdate", function(self, dt)
+        self.elapsed = self.elapsed + dt
+        if self.elapsed < 0.25 then return end
+        self.elapsed = 0
+        UpdatePrompt()
+    end)
+    return f
+end
+-- Frames holding a secure button can't be shown or hidden in combat.
+local function SetFlagButton(show)
+    if prompt.flag:IsShown() == show or InCombatLockdown() then return end
+    prompt.flag:SetShown(show)
+end
+local function SetPromptShown(show)
+    if prompt:IsShown() == show then return end
+    if InCombatLockdown() then
+        promptAfterCombat = true
+        eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    if show then prompt.flag:SetAttribute("type", "macro") end
+    prompt:SetShown(show)
+end
+-- Decides whether the prompt is up and what it says, and enforces the
+-- grace deadline. Runs every second and on flag changes.
+UpdatePrompt = function()
+    if not char or not prompt then return end
+    prompt.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
+    if Desired() then
+        deadline, char.graceLeft = nil, nil
+        if char.sworn then
+            Guard()
+            SetPromptShown(false)
+        elseif char.joining then
+            Swear()
+            SetPromptShown(false)
+        elseif char.sworn == nil and not char.declined then
+            prompt.text:SetText("Swear to RP-PvP on this character? You'll stay flagged for good, and the community will see your crest.")
+            SetFlagButton(false)
+            prompt.swear:Show()
+            prompt.no:Show()
+            SetPromptShown(true)
+        else
+            SetPromptShown(false)
+        end
+        return
+    end
+    prompt.swear:Hide()
+
+    local welcome = char.sworn == nil and not char.declined
+    if not char.sworn and not welcome and not char.joining then
+        SetPromptShown(false)
+        return
+    end
+    local left
+    if char.sworn then
+        if IsPVPTimerRunning() then
+            left = (GetPVPTimer() or 0) / 1000
+            deadline = GetTime() + left
+        else
+            -- Logged in unflagged: grace left from an earlier session carries over.
+            deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
+            left = deadline - GetTime()
+        end
+        if left <= 0 then Break("unflagged") SetPromptShown(false) return end
+    end
+    if guarded then
+        -- /pvp is replaced now, so the secure button can't flag you.
+        prompt.text:SetText("Something unflagged you. Right-click your portrait and choose PvP > Enable within "
+            .. FormatTime(left or 0) .. " to keep your oath.")
+        SetFlagButton(false)
+    elseif char.sworn then
+        prompt.text:SetText("You're unflagged. Flag again within " .. FormatTime(left) .. " or your oath breaks and your crest goes.")
+        prompt.flag:SetText("Stay flagged")
+        SetFlagButton(true)
+    else
+        prompt.text:SetText("Swear to RP-PvP on this character? You'll flag for PvP now and stay flagged for good, and the community will see your crest.")
+        prompt.flag:SetText("Flag and swear")
+        SetFlagButton(true)
+    end
+    -- Re-arm the button if a click didn't take.
+    local button = prompt.flag
+    if button.disarmedAt and GetTime() - button.disarmedAt > 2 and not InCombatLockdown() then
+        button.disarmedAt = nil
+        button:SetAttribute("type", "macro")
+    end
+    prompt.no:SetShown(not char.sworn)
+    SetPromptShown(true)
+end
+
+---------------------------------------------------------------------------
+-- Badges on the player, target and focus frames
+
+local function TooltipLines(tooltip, unit)
+    tooltip:AddLine(("|T%sCrest%s.tga:18:18|t HonorBound"):format(MEDIA, Faction(unit)), 1, 0.83, 0.4)
+    local guid = GUID(unit)
+    local level
+    if guid == myGUID then
+        level = A.PledgeLevel(char)
+    else
+        level = A.PeerPledgeLevel(Status(unit), GetTime())
+    end
+    if level then
+        tooltip:AddLine("PvP pledged since level " .. level, 0.85, 0.85, 0.85)
+    else
+        tooltip:AddLine("Sworn to RP-PvP. Always flagged.", 0.85, 0.85, 0.85)
+    end
+end
+local function BadgeTooltip(widget)
+    if not Status(widget.unit) then return end
+    GameTooltip:SetOwner(widget, "ANCHOR_RIGHT")
+    TooltipLines(GameTooltip, widget.unit)
+    GameTooltip:Show()
+end
+local function NewWidget(host, unit)
+    local badge = CreateFrame("Frame", nil, host)
+    badge.unit, badge.host = unit, host
+    badge:SetSize(30, 30)
+    badge:SetFrameLevel(host:GetFrameLevel() + 15)
+    badge:EnableMouse(true)
+    badge:SetScript("OnEnter", BadgeTooltip)
+    badge:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    badge.crest = badge:CreateTexture(nil, "ARTWORK")
+    badge.crest:SetAllPoints()
+    badge.fade = badge:CreateAnimationGroup()
+    local fade = badge.fade:CreateAnimation("Alpha")
+    fade:SetFromAlpha(0)
+    fade:SetToAlpha(1)
+    fade:SetDuration(0.35)
+    badge:Hide()
+    widgets[#widgets + 1] = badge
+    return badge
+end
+local function Portrait(host, unit)
+    if host.portrait then return host.portrait end
+    if unit == "player" then
+        return _G.PlayerPortrait or (host.PlayerFrameContainer and host.PlayerFrameContainer.PlayerPortrait)
+    end
+    local content = host.TargetFrameContainer
+    return (content and content.Portrait) or _G[(host:GetName() or "") .. "Portrait"]
+end
+local function PvpIcon(host, unit)
+    local ok, elements
+    if unit == "player" and PlayerFrame_GetPvPIndicatorElements then
+        ok, elements = pcall(PlayerFrame_GetPvPIndicatorElements)
+    elseif host.GetPvPIndicatorElements then
+        ok, elements = pcall(host.GetPvPIndicatorElements, host)
+    end
+    if ok and elements and elements.pvpIcon then return elements.pvpIcon end
+    if host.pvpIcon then return host.pvpIcon end
+    if unit == "player" then return _G.PlayerPVPIcon end
+    return _G[(host:GetName() or "") .. "TextureFramePVPIcon"]
+end
+-- The crest stands in for the PvP icon. Atlas icons are cropped to the
+-- glyph; the classic 64px file has the glyph in its top-left corner.
+local function Attach(widget)
+    local icon = PvpIcon(widget.host, widget.unit)
+    local portrait = Portrait(widget.host, widget.unit)
+    widget.icon = icon
+    widget:ClearAllPoints()
+    if icon then
+        local ok, atlas = pcall(icon.GetAtlas, icon)
+        if ok and atlas then
+            widget:SetPoint("CENTER", icon, "CENTER", db.offsetX, db.offsetY)
+        else
+            local size = icon:GetWidth() * 0.31
+            widget:SetPoint("CENTER", icon, "TOPLEFT", size + db.offsetX, -size + db.offsetY)
+        end
+    elseif portrait then
+        widget:SetPoint("BOTTOM", portrait, "TOP", db.offsetX, db.offsetY)
+    else
+        widget:SetPoint("TOPLEFT", widget.host, "TOPLEFT", db.offsetX + 12, db.offsetY + 12)
+    end
+    widget:SetScale(db.scale)
+end
+local function DiscoverFrames()
+    for _, entry in ipairs({ {"PlayerFrame", "player"}, {"TargetFrame", "target"}, {"FocusFrame", "focus"} }) do
+        local host = _G[entry[1]]
+        if host and not host.HonorBoundWidget then
+            host.HonorBoundWidget = NewWidget(host, entry[2])
+        end
+    end
+end
+-- Nameplates: a small crest to the left of the name. Plates are recycled,
+-- so the crest lives on the plate and is re-checked for each new unit.
+local function PlateCrest(unit)
+    local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit(unit)
+    if not plate or (plate.IsForbidden and plate:IsForbidden()) then return end
+    local host = plate.UnitFrame or plate
+    if not host.HonorBoundCrest then
+        host.HonorBoundCrest = host:CreateTexture(nil, "OVERLAY")
+        host.HonorBoundCrest:SetSize(16, 16)
+    end
+    local crest, name = host.HonorBoundCrest, host.name
+    crest:ClearAllPoints()
+    if name and name:IsShown() then
+        -- The name string is centred in a wider box: sit beside the text itself.
+        local width = name:GetStringWidth() or 0
+        if Secret(width) then width = 0 end
+        crest:SetPoint("RIGHT", name, "CENTER", -width / 2 - 2, 0)
+    else
+        crest:SetPoint("BOTTOM", host, "TOP", 0, 2)
+    end
+    return crest
+end
+RefreshPlate = function(unit)
+    local crest = PlateCrest(unit)
+    if not crest then return end
+    if db.plates and Status(unit) then
+        crest:SetTexture(MEDIA .. "Crest" .. Faction(unit) .. ".tga")
+        crest:Show()
+    else
+        crest:Hide()
+    end
+end
+Refresh = function()
+    if not db then return end
+    DiscoverFrames()
+    for _, widget in ipairs(widgets) do
+        Attach(widget)
+        local wearing = Status(widget.unit) ~= nil
+        if wearing then
+            widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
+            if not widget:IsShown() then widget.fade:Play() end
+            widget:Show()
+        else
+            widget:Hide()
+        end
+        -- Blizzard shows and hides the icon itself; alpha is ours to set.
+        if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
+    end
+    for unit in pairs(plates) do RefreshPlate(unit) end
+end
+
+---------------------------------------------------------------------------
+-- Events
+
+local function OnMessage(prefix, message, route, sender)
+    if prefix ~= A.PREFIX or Secret(message) or type(message) ~= "string" or #message > 255 then return end
+    if route == "WHISPER" then return OnWhisper(message, sender) end
+    if route == "CHANNEL" and message:find("^[FN]|") then
+        -- Our own posts echo back on the channel; we already know what they say.
+        local me = UnitName("player")
+        if type(sender) == "string" and not Secret(sender) and sender:match("^[^%-]+") == me then return end
+        OnShare(message)
+        return
+    end
+    if route ~= "GUILD" and route ~= "CHANNEL" and route ~= "PARTY" and route ~= "RAID" and route ~= "INSTANCE_CHAT" then return end
+    local requested = message:match("^Q|1|(.+)$")
+    if requested then
+        if requested == myGUID and GetTime() - lastAnswer >= 5 then
+            lastAnswer = GetTime()
+            Announce(true)
+        end
+        return
+    end
+    local guid, peer = A.DecodePledge(message)
+    local isPledge = guid ~= nil
+    if not guid then guid, peer = A.Decode(message) end
+    if guid and guid ~= myGUID then
+        if debugEnabled then Debug("RX " .. route .. " " .. message) end
+        -- Hearing from someone always overrides an earlier "no addon".
+        noAddon[guid], asking[guid] = nil, nil
+        peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
+        Refresh()
+    end
+end
+local function OnTooltip(tooltip)
+    if tooltip ~= GameTooltip or not db then return end
+    local _, unit = tooltip:GetUnit()
+    if Secret(unit) or not unit then return end
+    if Status(unit) then TooltipLines(tooltip, unit) end
+end
+local function Tick()
+    local now = GetTime()
+    for guid, peer in pairs(peers) do
+        if now - peer.seen >= A.TTL then peers[guid] = nil end
+    end
+    for guid, at in pairs(queries) do
+        if now - at > A.TTL then queries[guid] = nil end
+    end
+    PumpProbes()
+    if now - lastMinute >= 60 then
+        lastMinute = now
+        PruneCaches()
+        DebugSummary()
+    end
+    if char.sworn and not Desired() then UpdatePrompt() end
+    if lastPayload ~= A.Encode(myGUID or "", Sworn()) or lastPledgePayload ~= PledgePayload() or not lastAnnounce or now - lastAnnounce >= 60 then
+        Debug("Timer: status changed or 60-second update due")
+        Announce(true)
+    end
+    if not ChannelID() and now - lastJoin >= 60 then JoinChannel() end
+    Refresh()
+end
+local function PrintStatus()
+    Print("Chat icons: " .. (not A.chatAvailable and "unavailable" or db.chatIcons == false and "off" or "on")
+        .. ". /honor chat on|off")
+    local level = A.PledgeLevel(char)
+    if level then Print("PvP pledged since level " .. level .. " (honor-system record).") end
+    if char.sworn then
+        Print("You're sworn to RP-PvP. Flag: " .. (Desired() and "on" or "|cffff4444off|r") .. ".")
+    else
+        Print("You haven't sworn on this character. Type /honor swear.")
+    end
+    local count = 0
+    for _, peer in pairs(peers) do if peer.sworn then count = count + 1 end end
+    Print(count .. " sworn players heard from recently.")
+    Print(ChannelID() and "Community channel connected." or "Community channel pending; group sharing is also available.")
+end
+
+SLASH_HONORBOUND1 = "/honor"
+SLASH_HONORBOUND2 = "/honorbound"
+SlashCmdList.HONORBOUND = function(input)
+    if not db then return end
+    local debugCommand = (input or ""):lower():match("^%s*debug%s*(.-)%s*$")
+    if debugCommand ~= nil then
+        if debugCommand == "on" then debugEnabled, debugVerbose = true, false
+        elseif debugCommand == "verbose" then debugEnabled, debugVerbose = true, true
+        elseif debugCommand == "off" then debugEnabled, debugVerbose = false, false
+        elseif debugCommand == "" then debugEnabled, debugVerbose = not debugEnabled, false
+        else Print("Use /honor debug on, /honor debug verbose or /honor debug off.") return end
+        Print("Debug " .. (not debugEnabled and "off." or (debugVerbose and "verbose" or "on")
+            .. " (until reload/logout). Accepted sends do not confirm delivery."))
+        if debugEnabled then
+            Debug("Community channel=" .. tostring(ChannelID()) .. "; group=" .. tostring(GroupRoute())
+                .. "; guild=" .. tostring(IsInGuild()) .. "; last accepted broadcast="
+                .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. "s ago") or "none")
+                .. "; probes queued=" .. probeCount .. ", replies queued=" .. #replies)
+        end
+        return
+    end
+    local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")
+    if chatCommand ~= nil then
+        if chatCommand == "on" then db.chatIcons = true
+        elseif chatCommand == "off" then db.chatIcons = false
+        elseif chatCommand ~= "" then Print("Use /honor chat on or /honor chat off.") return end
+        Print(not A.chatAvailable and "Chat icons unavailable: this client lacks the sender-name filter API."
+            or (db.chatIcons == false and "Chat icons off." or "Chat icons on (recent advertised pledge)."))
+        return
+    end
+    if not db then return end
+    local command, arg = input:lower():match("^(%S*)%s*(.-)%s*$")
+    if command == "swear" or command == "join" then
+        if char.sworn then
+            Print("You're already sworn.")
+        elseif Desired() then
+            Swear()
+        else
+            char.declined, char.joining = nil, true
+            if guarded then Print("Right-click your portrait and choose PvP > Enable to complete your oath.") end
+        end
+        UpdatePrompt()
+    elseif command == "renounce" then
+        if arg ~= "confirm" then
+            Print("This breaks your oath and removes your crest. Type /honor renounce confirm to proceed.")
+        else
+            Break("renounced")
+            char.declined = true
+        end
+    elseif command == "plates" then
+        db.plates = not db.plates
+        Print("Nameplate crests " .. (db.plates and "on" or "off") .. ".")
+    elseif command == "scale" then
+        local value = tonumber(arg)
+        if not value or value < 0.6 or value > 2 then Print("Use /honor scale 0.6–2") return end
+        db.scale = value
+    elseif command == "offset" then
+        local x, y = arg:match("^(%-?%d+)%s+(%-?%d+)$")
+        x, y = tonumber(x), tonumber(y)
+        if not x or not y or math.abs(x) > 200 or math.abs(y) > 200 then Print("Use /honor offset X Y (−200 to 200)") return end
+        db.offsetX, db.offsetY = x, y
+    elseif command == "reset" then
+        db.scale, db.offsetX, db.offsetY, db.plates = 1, 0, 0, true
+        Print("Badge placement reset.")
+    elseif command == "" or command == "status" then
+        PrintStatus()
+    else
+        Print("/honor · /honor swear · /honor renounce · /honor plates · /honor scale 1 · /honor offset 0 0 · /honor reset")
+    end
+    Refresh()
+end
+
+-- Built while the game loads: secure buttons can't be set up in combat,
+-- and a /reload can land you in combat before PLAYER_LOGIN.
+prompt = CreatePrompt()
+
+for _, event in ipairs({"PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT"}) do
+    eventFrame:RegisterEvent(event)
+end
+-- Speakers we might not know yet. Group and guild chat are covered by
+-- their own routes, so only open chat feeds the probe queue.
+local probeChat = {CHAT_MSG_SAY = true, CHAT_MSG_YELL = true, CHAT_MSG_EMOTE = true,
+    CHAT_MSG_CHANNEL = true, CHAT_MSG_WHISPER = true}
+for event in pairs(probeChat) do eventFrame:RegisterEvent(event) end
+eventFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "PLAYER_LOGIN" then
+        HonorBoundDB = type(HonorBoundDB) == "table" and HonorBoundDB or {}
+        db = HonorBoundDB
+        db.scale = math.min(2, math.max(0.6, tonumber(db.scale) or 1))
+        db.offsetX = math.min(200, math.max(-200, tonumber(db.offsetX) or 0))
+        db.offsetY = math.min(200, math.max(-200, tonumber(db.offsetY) or 0))
+        db.ring = nil
+        if db.plates == nil then db.plates = true end
+        HonorBoundCharDB = type(HonorBoundCharDB) == "table" and HonorBoundCharDB or {}
+        char = HonorBoundCharDB
+        -- Existing oaths start their history now; never invent an earlier level.
+        A.EnsurePledge(char, UnitLevel("player"))
+        myGUID = GUID("player")
+        myServer = Server(myGUID)
+        LoadCaches()
+        local addFilter = ChatFrame_AddMessageEventFilter
+            or (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter)
+        if addFilter then addFilter("CHAT_MSG_SYSTEM", HideUnreachable) end
+        A.chatAvailable = A.InstallChat(function() return db.chatIcons ~= false end, function(guid)
+            if guid == myGUID then return Sworn() end
+            local peer = peers[guid]
+            return peer and peer.sworn and GetTime() - peer.seen < A.TTL
+        end, ChatFaction)
+        -- Give the client's usual channels time to claim their channel numbers.
+        lastJoin = GetTime() - 45
+        C_ChatInfo.RegisterAddonMessagePrefix(A.PREFIX)
+        if TooltipDataProcessor and Enum and Enum.TooltipDataType then
+            TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, OnTooltip)
+        elseif GameTooltip:HasScript("OnTooltipSetUnit") then
+            GameTooltip:HookScript("OnTooltipSetUnit", OnTooltip)
+        end
+        C_Timer.After(15, JoinChannel)
+        C_Timer.NewTicker(1, Tick)
+        UpdatePrompt()
+        Refresh()
+        if char.sworn then
+            Print("Sworn to RP-PvP. /honor for status.")
+        elseif char.sworn == false or char.declined then
+            Print("Not sworn on this character. Type /honor swear to earn your crest.")
+        end
+    elseif not db then
+        return
+    elseif event == "PLAYER_LOGOUT" then
+        if char.sworn and deadline then char.graceLeft = math.max(0, deadline - GetTime()) end
+    elseif event == "CHAT_MSG_ADDON" then
+        OnMessage(...)
+    elseif probeChat[event] then
+        local sender, guid = select(2, ...), select(12, ...)
+        if Secret(guid) or not A.ValidGUID(guid) then return end
+        Query(guid, PRIORITY_CHAT, FullName(sender))
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        QueryUnit("mouseover", PRIORITY_UNIT)
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        local unit = ...
+        if Secret(unit) or not unit then return end
+        plates[unit] = true
+        RefreshPlate(unit)
+    elseif event == "NAME_PLATE_UNIT_REMOVED" then
+        local unit = ...
+        if Secret(unit) or not unit then return end
+        local crest = PlateCrest(unit)
+        if crest then crest:Hide() end
+        plates[unit] = nil
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+        if promptAfterCombat then promptAfterCombat = nil UpdatePrompt() end
+    elseif event == "ADDON_LOADED" then
+        if GreyOutDisable() then self:UnregisterEvent("ADDON_LOADED") end
+    else
+        if event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FACTION" then UpdatePrompt() end
+        if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_FLAGS_CHANGED" then Announce(true) end
+        Refresh()
+    end
+end)

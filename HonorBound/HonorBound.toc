@@ -1,0 +1,12 @@
+## Interface: 16001
+## Title: HonorBound
+## Notes: A community crest for players sworn to RP-PvP. Keeps you flagged and shows the crest on sworn players.
+## Author: ModeratelyAware
+## Version: 0.3.0
+## SavedVariables: HonorBoundDB
+## SavedVariablesPerCharacter: HonorBoundCharDB
+
+Core.lua
+Pledge.lua
+Chat.lua
+HonorBound.lua
