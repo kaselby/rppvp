@@ -734,4 +734,75 @@ check(borrowed() == 5, "autoflag on borrows the keys")
 setFlag(true)
 check(borrowed() == 0, "and hands them back once flagged")
 
+-- 0.4.1: Forever names. Whispers to "First Surname-Realm" bounce; replies
+-- go to "First-Surname", the form probes use.
+advance(400)
+sent = {}
+local fg = "Player-97-F0F001"
+players[fg] = { name = "Aninja Rppvp", realm = "ClassicBetaPvE" }
+addon("WQ|1|" .. fg .. "|1|20|0.4.0", "Aninja Rppvp-ClassicBetaPvE")
+advance(2)
+check(#whispers("Aninja-Rppvp") == 1 and #whispers("Aninja Rppvp-ClassicBetaPvE") == 0, "reply goes to First-Surname, not First Surname-Realm")
+check(HonorBoundDB.likely[fg] and HonorBoundDB.likely[fg].name == "Aninja-Rppvp", "remembered under the whisperable name")
+
+-- Always reply, even while our own probe to them is still waiting.
+sent = {}
+local both = "Player-97-F0F003"
+units.mouseover = { guid = both, flagged = true, faction = units.player.faction, name = "Both", realm = "Sides" }
+event("UPDATE_MOUSEOVER_UNIT")
+check(probeSent("Both-Sides"), "our probe goes out")
+addon("WQ|1|" .. both .. "|1|20|0.4.0", "Both Sides-ClassicBetaPvE")
+advance(2)
+local replied = false
+for _, m in ipairs(whispers("Both-Sides")) do replied = replied or m.message:find("^WR|") ~= nil end
+check(replied, "a probe crossing ours still gets a reply")
+
+-- Re-probe a peer in view before the badge expires.
+sent = {}
+units.mouseover = nil
+units.nameplate1 = { guid = both, flagged = true, faction = units.player.faction, name = "Both", realm = "Sides" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+local reprobed
+for t = 1, A.TTL do
+    advance(1)
+    event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+    if not reprobed then
+        for _, m in ipairs(whispers("Both-Sides")) do if m.message:find("^WQ|") then reprobed = t end end
+    end
+end
+check(reprobed and reprobed < A.TTL - 20, "re-probed before the badge expires (" .. tostring(reprobed) .. " s)")
+
+-- Crests in whispers, both directions, and in yell and emotes.
+local function crestIn(event_, guid, name)
+    local args = {}
+    args[12] = guid
+    local shown = ChatFrameUtil.filter(event_, name, unpack(args, 1, 12))
+    return shown and shown:find("Crest", 1, true) ~= nil
+end
+addon("WR|1|" .. both .. "|1|20|0.4.0", "Both Sides-ClassicBetaPvE")
+for _, e in ipairs({"CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_YELL", "CHAT_MSG_EMOTE"}) do
+    check(crestIn(e, both, "Both"), e .. " shows the crest")
+end
+
+-- /honor sim off turns debug off too.
+SlashCmdList.HONORBOUND("sim 10")
+SlashCmdList.HONORBOUND("sim off")
+debugLines = {}
+SlashCmdList.HONORBOUND("debug")
+check(not tostring(debugLines[#debugLines]):find("Debug off", 1, true), "debug was already off after sim off")
+SlashCmdList.HONORBOUND("debug off")
+
+-- A bounced reply shows in debug.
+SlashCmdList.HONORBOUND("debug on")
+sent = {}
+local gone = "Player-97-F0F004"
+addon("WQ|1|" .. gone .. "|0|0|0.4.0", "Gone Away-ClassicBetaPvE")
+advance(2)
+debugLines = {}
+check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Gone-Away' is currently playing.") == true, "bounced reply error hidden")
+local logged = false
+for _, line in ipairs(debugLines) do logged = logged or line:find("reply to Gone%-Away bounced") ~= nil end
+check(logged, "bounced reply reported in debug")
+SlashCmdList.HONORBOUND("debug off")
+
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")

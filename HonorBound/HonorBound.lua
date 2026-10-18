@@ -238,7 +238,9 @@ local PROBE_STALE = 30           -- queued this long without sending: drop
 local NO_ADDON = 7200            -- our own silent probe: don't ask for 2 hours
 local NO_ADDON_SHARED = 1800     -- someone else's: 30 minutes
 local LIKELY_KEEP = 14 * 86400   -- remember addon users for two weeks
-local REPROBE_AFTER = A.TTL - 30 -- refresh peers still in view before they expire
+-- Refresh peers still in view well before they expire: REPROBE_AFTER plus up
+-- to REPROBE_JITTER spreads a realm out, and the rest leaves room for the queue.
+local REPROBE_AFTER, REPROBE_JITTER = A.TTL - 90, 45
 local QUEUE_MAX, REPLY_MAX, REPLY_GAP = 40, 20, 60
 local SHARE_WAIT, SHARE_STALE, SHARE_REFRESH = {2, 10}, 60, 150
 local NO_BATCH, NO_GAP, NO_MAX = 15, {20, 40}, 60
@@ -313,10 +315,20 @@ local function FullName(name, realm)
     end
     return name
 end
+-- Forever names are "First Surname". Whispers there go to "First-Surname",
+-- the form UnitName gives (surname in the realm slot); "First Surname-Realm",
+-- from GetPlayerInfoByGUID or a whisper's sender, bounces. Elsewhere names
+-- have no spaces and pass through unchanged.
+local function Address(name)
+    if type(name) ~= "string" or Secret(name) then return name end
+    local first, surname = name:match("^([^%s%-]+)%s+([^%-]+)")
+    if not first then return name end
+    return first .. "-" .. surname:gsub("[%s%-]", "")
+end
 local function GuidName(guid)
     if not GetPlayerInfoByGUID then return end
     local _, _, _, _, _, name, realm = GetPlayerInfoByGUID(guid)
-    return FullName(name, realm)
+    return Address(FullName(name, realm))
 end
 local function ValidName(name)
     return type(name) == "string" and #name <= 64 and name:match("^[^%-|]+%-[^%-|]+$") ~= nil
@@ -414,7 +426,7 @@ local function Probe(guid, priority, name)
     local now = GetTime()
     local peer = peers[guid]
     -- Spread re-probes so a whole realm doesn't refresh the same player at once.
-    jitter[guid] = jitter[guid] or math.random(0, 60)
+    jitter[guid] = jitter[guid] or math.random(0, REPROBE_JITTER)
     if peer and now - peer.seen < REPROBE_AFTER + jitter[guid] then return end
     if pending[guid] or RuledOut(guid) then return end
     if likely[guid] then priority = PRIORITY_LIKELY end
@@ -596,6 +608,7 @@ end
 
 local function OnWhisper(message, sender)
     if Secret(sender) or type(sender) ~= "string" then return end
+    sender = Address(sender)
     local kind, guid, peer = DecodeWhisper(message)
     if not kind or guid == myGUID then return end
     -- The status claims a GUID; it must belong to whoever sent it.
@@ -616,10 +629,10 @@ local function OnWhisper(message, sender)
     Unqueue(guid)
     ShareFound(guid, name, peer)
     ChatChanged(guid)
-    -- If our probe already reached them they have our status; otherwise answer.
+    -- Always answer a probe, even with ours in flight: ours may never arrive.
     local queued = false
     for _, r in ipairs(replies) do queued = queued or r.name == name end
-    if kind == "Q" and not probed and not queued and #replies < REPLY_MAX
+    if kind == "Q" and not queued and #replies < REPLY_MAX
         and not (replied[name] and now - replied[name] < REPLY_GAP) then
         replies[#replies + 1] = {name = name, at = now}
     end
@@ -628,6 +641,7 @@ end
 -- Shared on our channel by someone on our realm.
 local function OnShare(message)
     local guid, name, sworn, raw, version = message:match("^F|1|([^|]+)|([^|]+)|([01])|(%d+)|([%w%.%-?]+)$")
+    name = Address(name)
     if guid then
         local peer = A.ValidGUID(guid) and guid ~= myGUID and ValidName(name) and DecodeStatus(sworn, raw, version)
         if not peer then return true end
@@ -712,7 +726,10 @@ local function HideUnreachable(_, _, message)
     end
     local now = GetTime()
     for name, at in pairs(replied) do
-        if now - at < 5 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then return true end
+        if now - at < 5 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then
+            Debug("Our reply to " .. name .. " bounced (no player by that name).")
+            return true
+        end
     end
 end
 -- Load the saved caches, dropping anything expired or malformed.
@@ -724,6 +741,7 @@ local function LoadCaches()
         if not A.ValidGUID(guid) or type(expires) ~= "number" or expires <= now then db.noAddon[guid] = nil end
     end
     for guid, entry in pairs(db.likely) do
+        if type(entry) == "table" then entry.name = Address(entry.name) end
         if not A.ValidGUID(guid) or type(entry) ~= "table" or not ValidName(entry.name)
             or type(entry.seen) ~= "number" or now - entry.seen > LIKELY_KEEP then
             db.likely[guid] = nil
@@ -1519,7 +1537,8 @@ SlashCmdList.HONORBOUND = function(input)
             for guid, peer in pairs(peers) do
                 if peer.simulated then peers[guid] = nil ChatChanged(guid) end
             end
-            Print("Simulation off. Simulated badges removed; everything learned for real is kept.")
+            debugEnabled, debugVerbose = false, false
+            Print("Simulation off, and debug with it. Simulated badges removed; everything learned for real is kept.")
         elseif simCommand ~= "" then
             local value = tonumber(simCommand:match("^(%d+)%%?$") or "")
             if not value or value > 100 then Print("Use /honor sim 0-100 or /honor sim off.") return end

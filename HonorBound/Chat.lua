@@ -6,6 +6,9 @@ local events = {
     CHAT_MSG_PARTY = true, CHAT_MSG_PARTY_LEADER = true,
     CHAT_MSG_RAID = true, CHAT_MSG_RAID_LEADER = true,
     CHAT_MSG_INSTANCE_CHAT = true, CHAT_MSG_INSTANCE_CHAT_LEADER = true,
+    CHAT_MSG_YELL = true, CHAT_MSG_EMOTE = true,
+    -- Incoming whispers show the sender; outgoing ones the person whispered.
+    CHAT_MSG_WHISPER = true, CHAT_MSG_WHISPER_INFORM = true,
 }
 -- The same faction crest as on frames and nameplates. The caller works out
 -- the sender's faction; any crest already in the name marks it as done.

@@ -43,8 +43,8 @@ or you'll get two sets of flag prompts.
 A blue (Alliance) or red (Horde) shield with crossed swords **replaces the
 PvP icon** on the player, target and focus frames. A smaller copy sits just
 left of the name on sworn players' nameplates, and the same crest appears
-before sworn players' names in chat (faction read from their race; your own
-faction if unknown). Hover the crest or the player for a "Sworn to RP-PvP"
+before sworn players' names in chat, including whispers (both ways), yells and
+emotes (faction read from their race; your own faction if unknown). Hover the crest or the player for a "Sworn to RP-PvP"
 line.
 
 A player wears the crest only when two things are true: their addon says
@@ -74,6 +74,10 @@ backend realm (for example ClassicBetaPvP and ClassicBetaPvP2 each get their
 own `HonorBound` channel), and addon `YELL`/`SAY` messages are refused, so
 players from another realm are reached by hidden addon whispers. What one
 player learns about another realm is shared once on their own realm's channel.
+Forever names are "First Surname": whispers must go to `First-Surname`, the
+form `UnitName` returns (surname in the realm slot). `First Surname-Realm`,
+which `GetPlayerInfoByGUID` and incoming whisper senders give, bounces, so
+every whisper address is normalized to the first form.
 
 The protocol is version 2. Players still on 0.1.x won't show crests until
 they update. Whispers don't cross factions, so cross-faction discovery isn't
@@ -108,8 +112,8 @@ player's whisper result serve their whole realm.
 |---|---|---|---|---|
 | `S\|2\|…` + `P\|1\|…` status and pledge level | Channel, group, guild | You | Login, 2 s after joining the channel, every 60 s, on oath/flag/group change | At most once per 3 s if unchanged. Always sent, still spends budget |
 | `Q\|1\|<GUID>` "does this player use the addon?" | Channel, group, guild | An unknown player on **your realm** | Seen on a nameplate, target, focus, mouseover or tooltip, or in chat | Asked **once**. No announcement within 10 s: on the no-addon list for 2 h (saved, not shared). At most 1 a second, budget for every route |
-| `WQ\|1\|…` probe, carries your status | Whisper | A player on **another realm**, same faction | Seen: remembered addon users first, then mouseover/target, chat, nameplates | Queue of 40, dropped after 30 s waiting, 1 whisper a second. Skipped if known (150 s + random 0-60 s), awaiting a reply, or on the no-addon list |
-| `WR\|1\|…` reply, carries your status | Whisper | Someone who probed you | A `WQ` arrives and you hadn't probed them | Sent before probes. At most 20 waiting, 1 per player per minute, dropped after 30 s |
+| `WQ\|1\|…` probe, carries your status | Whisper | A player on **another realm**, same faction | Seen: remembered addon users first, then mouseover/target, chat, nameplates | Queue of 40, dropped after 30 s waiting, 1 whisper a second. Skipped if known (90 s + random 0-45 s, so a peer in view is refreshed before its 180 s expiry), awaiting a reply, or on the no-addon list |
+| `WR\|1\|…` reply, carries your status | Whisper | Someone who probed you | A `WQ` arrives, even if your own probe to them is in flight | Sent before probes. At most 20 waiting, 1 per player per minute, dropped after 30 s |
 | `F\|1\|…` "found this player on the other realm" | Channel | A player on another realm you just confirmed | After a `WQ`/`WR` exchange with them | Random 2-10 s wait; skipped if the same status was posted in the last 150 s. Spare budget only; a refused send pauses sharing for 2 min |
 | `N\|1\|id,id,…` "no addon" list | Channel | Up to 15 players on another realm who didn't answer | 20-40 s after the first one is collected | Someone else's list resets your timer and removes duplicates. At most 60 waiting. Same 2 min pause on refusal |
 
