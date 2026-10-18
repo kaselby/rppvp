@@ -108,7 +108,7 @@ player's whisper result serve their whole realm.
 |---|---|---|---|---|
 | `S\|2\|…` + `P\|1\|…` status and pledge level | Channel, group, guild | You | Login, 2 s after joining the channel, every 60 s, on oath/flag/group change | At most once per 3 s if unchanged. Always sent, still spends budget |
 | `Q\|1\|<GUID>` "does this player use the addon?" | Channel, group, guild | An unknown player on **your realm** | Seen on a nameplate, target, focus, mouseover or tooltip, or in chat | Asked **once**. No announcement within 10 s: on the no-addon list for 2 h (saved, not shared). At most 1 a second, budget for every route |
-| `WQ\|1\|…` probe, carries your status | Whisper | A player on **another realm**, same faction | Seen: remembered addon users first, then mouseover/target, chat, nameplates | Queue of 40, dropped after 30 s waiting, 1 whisper a second. Skipped if known (90 s + random 0-45 s, so a peer in view is refreshed before its 180 s expiry), awaiting a reply, or on the no-addon list |
+| `WQ\|1\|…` probe, carries your status | Whisper | A player on **another realm**, same faction | Seen: remembered addon users first, then mouseover/target, chat, nameplates | Queue of 40, dropped after 30 s waiting, 1 whisper a second. Skipped if known (210 s + random 0-45 s, so a peer in view is refreshed before its 5 min expiry), awaiting a reply, or on the no-addon list |
 | `WR\|1\|…` reply, carries your status | Whisper | Someone who probed you | A `WQ` arrives, even if your own probe to them is in flight | Sent before probes. At most 20 waiting, 1 per player per minute, dropped after 30 s |
 | `F\|1\|…` "found this player on the other realm" | Channel | A player on another realm you just confirmed | After a `WQ`/`WR` exchange with them | Random 2-10 s wait; skipped if the same status was posted in the last 150 s. Spare budget only; a refused send pauses sharing for 2 min |
 | `N\|1\|id,id,…` "no addon" list | Channel | Up to 15 players on another realm who didn't answer | 20-40 s after the first one is collected | Someone else's list resets your timer and removes duplicates. At most 60 waiting. Same 2 min pause on refusal |
@@ -117,7 +117,7 @@ player's whisper result serve their whole realm.
 
 | You receive | Effect |
 |---|---|
-| `S` / `P` (channel, group, guild, instance) | Known peer for 180 s; clears any no-addon entry for them |
+| `S` / `P` (channel, group, guild, instance) | Known peer for 5 min; clears any no-addon entry for them |
 | `Q` asking about **you** | You re-announce, at most once per 5 s |
 | `WQ` | Learn their status, remember them as an addon user (2 weeks), share a find, queue a reply |
 | `WR` | Learn their status, remember them, share a find |
@@ -126,16 +126,16 @@ player's whisper result serve their whole realm.
 | Your own `F` / `N` echoing back | Ignored |
 
 A badge shows only when the player is a known addon user, has sworn, was
-heard from in the last 180 s, **and** is PvP-flagged right now (`UnitIsPVP`).
+heard from in the last 5 minutes, **and** is PvP-flagged right now (`UnitIsPVP`).
 
 ### What gets remembered
 
 | List | Holds | Lasts | Saved |
 |---|---|---|---|
-| Known players | Status of addon users heard from | 180 s | No |
+| Known players | Status of addon users heard from | 5 min | No |
 | Remembered addon users | Name-Realm of confirmed users, probed first when seen again | 2 weeks | Yes |
 | No addon | Players who didn't answer | 2 h (your own) / 30 min (shared) | Yes |
-| Heard finds | Last find posted per player | 180 s | No |
+| Heard finds | Last find posted per player | 5 min | No |
 
 Mistakes correct themselves: any message from a player (announcement, probe,
 reply, or someone's find) removes them from the no-addon list. A player on

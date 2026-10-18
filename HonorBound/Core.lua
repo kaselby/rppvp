@@ -1,8 +1,8 @@
 local _, Addon = ...
-Addon.VERSION = "0.4.1"
+Addon.VERSION = "0.4.2"
 Addon.PREFIX = "HONORBOUND1"
 Addon.CHANNEL = "HonorBound"
-Addon.TTL = 180     -- seconds before a silent peer is forgotten
+Addon.TTL = 300     -- seconds before a silent peer is forgotten
 Addon.GRACE = 300   -- seconds a sworn player may stay unflagged before the oath breaks
 function Addon.ValidGUID(guid)
     return type(guid) == "string" and #guid <= 80 and guid:match("^Player%-%d+%-%x+$") ~= nil
