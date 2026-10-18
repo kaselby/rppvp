@@ -680,10 +680,17 @@ instance = true
 event("PLAYER_ENTERING_WORLD")
 setFlag(false)
 check(borrowed() == 0 and not prompt.shown, "inside a dungeon: no borrowed keys, no popup")
+check(playerBadge().shown, "inside a dungeon: unflagged, but your crest stays")
+channelResult = 0 advance(11) event("GROUP_ROSTER_UPDATE")
+check(lastSent():find("|1|"), "inside a dungeon: you still announce yourself as sworn")
+units.target = { guid = other, flagged = false, faction = units.player.faction, name = "Dungeon", realm = "Mate" }
+peer(true) event("PLAYER_TARGET_CHANGED")
+check(targetBadge().shown, "inside a dungeon: an unflagged sworn peer keeps the crest")
 advance(A.GRACE + 30)
 check(HonorBoundCharDB.sworn, "dungeon time doesn't run the countdown down")
 instance = false
 event("PLAYER_ENTERING_WORLD")
+check(not playerBadge().shown and not targetBadge().shown, "outside, unflagged: no crests until the flag is back")
 check(borrowed() == 5 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
 check(not prompt.shown, "no popup while the keys are borrowed")
 local both = function(name) return ("/pvp\n/click %s LeftButton 1\n/click %s LeftButton"):format(name, name) end

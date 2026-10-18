@@ -21,7 +21,8 @@ game.
   crest in place of the usual PvP icon, on nameplates, and in chat. Hover it
   to see the level they swore at.
 - **Can't be faked.** On portraits and nameplates, a crest only shows while
-  the game says that player really is flagged.
+  the game says that player really is flagged. Inside dungeons and raids,
+  where nobody can be flagged, sworn players keep their crest.
 
 You only see crests on other players who also use HonorBound, so share it
 with your guild and friends.

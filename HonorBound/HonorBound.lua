@@ -114,8 +114,18 @@ local function ChatFaction(guid)
     end
     return Faction("player")
 end
+local function InPausedInstance()
+    if not IsInInstance then return false end
+    local inside, kind = IsInInstance()
+    return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
+end
+-- Dungeons and raids unflag you and you can't reflag inside, so there a
+-- sworn player keeps the crest. Anyone we can see in one is in it with us.
+local function FlaggedOrInside(unit)
+    return Flagged(unit) or InPausedInstance()
+end
 local function Sworn()
-    return char and char.sworn and Desired()
+    return char and char.sworn and (Desired() or InPausedInstance())
 end
 local function FormatTime(seconds)
     seconds = math.max(0, math.floor(seconds))
@@ -839,7 +849,7 @@ local function Status(unit)
     local guid = GUID(unit)
     if not guid then return end
     if guid == myGUID then
-        if char and char.sworn and Flagged("player") then return { version = A.VERSION } end
+        if char and char.sworn and FlaggedOrInside("player") then return { version = A.VERSION } end
         return
     end
     if UnitIsPlayer(unit) then
@@ -848,11 +858,11 @@ local function Status(unit)
     local peer = peers[guid]
     if peer and GetTime() - peer.seen < A.TTL then
         -- Simulated users stand in for "wears a badge", flagged or not.
-        if peer.sworn and (peer.simulated or Flagged(unit)) then return peer end
+        if peer.sworn and (peer.simulated or FlaggedOrInside(unit)) then return peer end
         return
     end
     -- Nothing fresh: their saved status, while the re-check is out.
-    if Cached(guid) and Flagged(unit) then
+    if Cached(guid) and FlaggedOrInside(unit) then
         return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
     end
 end
@@ -938,11 +948,6 @@ function idle.Away() return GetTime() - idle.last >= idle.after end
 -- You turned the flag off yourself (/pvp; the portrait menu is greyed out) rather than the
 -- game doing it on a zone change: ask straight away, don't wait for a key.
 idle.manual, idle.wasDesired = false, nil
-local function InPausedInstance()
-    if not IsInInstance then return false end
-    local inside, kind = IsInInstance()
-    return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
-end
 local overlayHost
 local overlays = {}
 -- Runs after any borrowed key press or overlay click: the keys and overlays

@@ -68,7 +68,7 @@ player's whisper result serve their whole realm.
 A badge shows only when the player is a known addon user, has sworn, was
 heard from in the last 5 minutes (or, for a remembered user not yet heard from
 this time, was sworn when last heard and hasn't missed two re-checks in a row),
-**and** is PvP-flagged right now (`UnitIsPVP`). Chat can't check the flag.
+**and** is PvP-flagged right now (`UnitIsPVP`), unless you're in a dungeon or raid yourself (anyone you can see there is in it with you, and nobody can be flagged inside). Status messages likewise say "sworn" while you're inside unflagged. Chat can't check the flag.
 
 ### What gets remembered
 

@@ -7,7 +7,7 @@ Addon.GRACE = 300   -- seconds a sworn player may stay unflagged before the oath
 function Addon.ValidGUID(guid)
     return type(guid) == "string" and #guid <= 80 and guid:match("^Player%-%d+%-%x+$") ~= nil
 end
--- "S|2|<GUID>|<1 sworn and flagged, 0 otherwise>|<version>"
+-- "S|2|<GUID>|<1 sworn and flagged (or inside a dungeon/raid), 0 otherwise>|<version>"
 function Addon.Encode(guid, sworn)
     return ("S|2|%s|%d|%s"):format(guid, sworn and 1 or 0, Addon.VERSION)
 end
