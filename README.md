@@ -1,4 +1,4 @@
-# HonorBound
+<p align="center"><img src="art/header.png" alt="HonorBound: the RP-PvP addon" width="560"></p>
 
 WoW Forever has no RP-PvP realms, so this addon makes the commitment a
 community badge instead. Each character swears an oath to stay flagged for
