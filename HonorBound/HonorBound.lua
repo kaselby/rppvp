@@ -845,13 +845,13 @@ local function Guard()
 end
 
 ---------------------------------------------------------------------------
--- Reflag on your next keypress. While you're sworn and unflagged outside an
--- instance, your action bar keys are overridden by a secure button whose
--- macro is "/pvp" followed by "/click <the button that key normally presses>",
--- so the press flags you and still uses the ability. The override is lifted
--- after one press, as soon as you're flagged, and just before combat (key
--- bindings can't change during combat, and /pvp toggles: a press while
--- already flagged would unflag you).
+-- Reflag on your next keypress or click. While you're sworn and unflagged
+-- outside an instance, your action bar keys are overridden by a secure button
+-- whose macro is "/pvp" followed by "/click <the button that key presses>",
+-- and transparent secure buttons sit over the bar buttons for mouse clicks.
+-- Either way the use flags you and still triggers the ability. They're lifted
+-- after one use, as soon as you're flagged, and just before combat (/pvp
+-- toggles: a use while already flagged would unflag you).
 
 local BAR_BINDINGS = {
     {"ACTIONBUTTON", "ActionButton"},
@@ -859,10 +859,21 @@ local BAR_BINDINGS = {
     {"MULTIACTIONBAR2BUTTON", "MultiBarBottomRightButton"},
     {"MULTIACTIONBAR3BUTTON", "MultiBarRightButton"},
     {"MULTIACTIONBAR4BUTTON", "MultiBarLeftButton"},
+    {"MULTIACTIONBAR5BUTTON", "MultiBar5Button"},
+    {"MULTIACTIONBAR6BUTTON", "MultiBar6Button"},
+    {"MULTIACTIONBAR7BUTTON", "MultiBar7Button"},
+    {"SHAPESHIFTBUTTON", "StanceButton"},
+    {"BONUSACTIONBUTTON", "PetActionButton"},
+    {"EXTRAACTIONBUTTON", "ExtraActionButton"},
 }
 -- Keys checked for bar addons (Bartender, Dominos...), which bind keys to
 -- their own buttons as "CLICK <button>:<mouse button>".
-local COMMON_KEYS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="}
+-- Only keys bound to such a CLICK command are borrowed: movement and other
+-- keys are never touched.
+local COMMON_KEYS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "`"}
+for letter in ("QWERTYUIOPASDFGHJKLZXCVBNM"):gmatch(".") do COMMON_KEYS[#COMMON_KEYS + 1] = letter end
+for i = 1, 12 do COMMON_KEYS[#COMMON_KEYS + 1] = "F" .. i end
+for i = 0, 9 do COMMON_KEYS[#COMMON_KEYS + 1] = "NUMPAD" .. i end
 local reflagButton, reflagArmed, reflagArmedAt, reflagNotified
 local reflagPressedAt = -100
 
@@ -871,53 +882,130 @@ local function InPausedInstance()
     local inside, kind = IsInInstance()
     return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
 end
+local overlayHost
+local overlays = {}
+-- Runs after any borrowed key press or overlay click: the keys and overlays
+-- go back at once (/pvp toggles, so a second use would unflag you).
+local function ReflagPressed()
+    Debug("Reflag key or click used.")
+    reflagArmed, reflagPressedAt = false, GetTime()
+    if overlayHost and not InCombatLockdown() and overlayHost:IsShown() then overlayHost:Hide() end
+    if reflagButton and not InCombatLockdown() and ClearOverrideBindings then ClearOverrideBindings(reflagButton) end
+end
 local function CreateReflagButton()
     local button = CreateFrame("Button", "HonorBoundReflagButton", UIParent, "SecureActionButtonTemplate")
     button:RegisterForClicks("AnyUp")
     button:SetAttribute("useOnKeyDown", false)
     button:SetAttribute("type", "macro")
-    button:HookScript("PostClick", function()
-        Debug("Reflag key pressed.")
-        reflagArmed, reflagPressedAt = false, GetTime()
-        if not InCombatLockdown() and ClearOverrideBindings then ClearOverrideBindings(button) end
-    end)
+    button:HookScript("PostClick", ReflagPressed)
     return button
 end
--- Each borrowed key -> the macro line that presses what the key normally does.
-local function ReflagTargets()
-    local targets, seen = {}, {}
-    local function add(key, line)
-        if key and not seen[key] then seen[key] = true targets[#targets + 1] = {key = key, line = line} end
+-- Presses a button both ways. A secure action button acts on key down or on
+-- key up depending on the player's settings and ignores the other, so sending
+-- both lets exactly one through, whichever way it is set.
+local function ClickLines(name, mouse)
+    -- Stance and pet buttons act on every click, not on one half of it, so a
+    -- down plus an up would fire twice (shift in and straight back out).
+    if name:find("^StanceButton") or name:find("^PetActionButton") then
+        return ("/click %s %s"):format(name, mouse)
     end
-    -- Buttons that act on key down need "/click ... LeftButton 1" to fire.
-    local down = GetCVarBool and GetCVarBool("ActionButtonUseKeyDown") and " 1" or ""
+    return ("/click %s %s 1\n/click %s %s"):format(name, mouse, name, mouse)
+end
+-- The button a key presses right now. Override bindings (bar addons such as
+-- Bartender take over the default keys) are checked first, so a key whose
+-- Blizzard binding has been overridden presses the addon's button, not a
+-- hidden Blizzard one.
+local function KeyButton(key)
+    if not GetBindingAction then return end
+    local action = GetBindingAction(key, true)
+    if type(action) ~= "string" then return end
+    local name, mouse = action:match("^CLICK ([^:]+):(.+)$")
+    if not name then
+        for _, bar in ipairs(BAR_BINDINGS) do
+            local number = action:match("^" .. bar[1] .. "(%d+)$")
+            if number then name, mouse = bar[2] .. number, "LeftButton" break end
+        end
+    end
+    if name and name ~= "HonorBoundReflagButton" and _G[name] then return name, mouse end
+end
+-- Each borrowed key -> the macro lines that press what the key does now, and
+-- every bar button worth covering for mouse clicks -> its mouse button.
+local function ReflagTargets()
+    local targets, seen, buttons = {}, {}, {}
+    local function consider(key)
+        if not key or seen[key] then return end
+        seen[key] = true
+        local name, mouse = KeyButton(key)
+        if name then
+            targets[#targets + 1] = {key = key, line = ClickLines(name, mouse)}
+            buttons[name] = buttons[name] or mouse
+        end
+    end
+    -- Keys the Blizzard bars are bound to.
     if GetBindingKey then
         for _, bar in ipairs(BAR_BINDINGS) do
             for i = 1, 12 do
-                local name = bar[2] .. i
-                if _G[name] then
-                    for _, key in ipairs({GetBindingKey(bar[1] .. i)}) do
-                        add(key, "/click " .. name .. " LeftButton" .. down)
-                    end
-                end
+                for _, key in ipairs({GetBindingKey(bar[1] .. i)}) do consider(key) end
             end
         end
     end
-    if GetBindingAction then
-        for _, base in ipairs(COMMON_KEYS) do
-            for _, key in ipairs({base, "SHIFT-" .. base, "CTRL-" .. base, "ALT-" .. base}) do
-                local action = GetBindingAction(key, true)
-                local name, mouse
-                if type(action) == "string" then name, mouse = action:match("^CLICK ([^:]+):(.+)$") end
-                if name and name ~= "HonorBoundReflagButton" and _G[name] then
-                    add(key, ("/click %s %s%s"):format(name, mouse, down))
-                end
+    -- Keys bound to a "CLICK <button>:<mouse button>" command, whatever the
+    -- key (bar addons that ship their own bindings).
+    if GetNumBindings and GetBinding then
+        for i = 1, GetNumBindings() do
+            local binding = {n = select("#", GetBinding(i)), GetBinding(i)}
+            if type(binding[1]) == "string" and binding[1]:find("^CLICK ") then
+                for k = 3, binding.n do consider(binding[k]) end
             end
         end
     end
-    return targets
+    -- Keys a bar addon may have bound at runtime.
+    for _, base in ipairs(COMMON_KEYS) do
+        for _, key in ipairs({base, "SHIFT-" .. base, "CTRL-" .. base, "ALT-" .. base}) do consider(key) end
+    end
+    -- Mouse clicks: every visible Blizzard bar button, bound to a key or not.
+    for _, bar in ipairs(BAR_BINDINGS) do
+        for i = 1, 12 do
+            local name = bar[2] .. i
+            local frame = _G[name]
+            if frame and frame.IsVisible and frame:IsVisible() then buttons[name] = buttons[name] or "LeftButton" end
+        end
+    end
+    return targets, buttons
 end
--- Returns whether keys are borrowed now.
+-- Transparent secure buttons laid over the bar buttons, shown only while
+-- armed: a mouse click on a button runs /pvp and then clicks the button
+-- underneath. Hiding the host hides them all, even in combat.
+local function ShowOverlays(buttons)
+    if not overlayHost then
+        overlayHost = CreateFrame("Frame", nil, UIParent)
+        overlayHost:SetSize(1, 1)
+        overlayHost:SetPoint("CENTER")
+    end
+    local pvp = SLASH_PVP1 or "/pvp"
+    for name, mouse in pairs(buttons) do
+        local overlay = overlays[name]
+        if not overlay then
+            overlay = CreateFrame("Button", nil, overlayHost, "SecureActionButtonTemplate")
+            overlay:SetFrameStrata("HIGH")
+            overlay:RegisterForClicks("AnyUp")
+            overlay:SetAttribute("useOnKeyDown", false)
+            overlay:SetAttribute("type", "macro")
+            overlay:HookScript("PostClick", ReflagPressed)
+            overlays[name] = overlay
+        end
+        overlay:ClearAllPoints()
+        overlay:SetAllPoints(_G[name])
+        overlay:SetAttribute("macrotext1", pvp .. "\n" .. ClickLines(name, mouse))
+        overlay:SetAttribute("macrotext2", pvp .. "\n" .. ClickLines(name, "RightButton"))
+        overlay:Show()
+    end
+    for name, overlay in pairs(overlays) do
+        if not buttons[name] then overlay:Hide() end
+    end
+    overlayHost:Show()
+end
+-- Returns whether keys and buttons are borrowed now.
 local function ArmReflag()
     if reflagArmed then return true end
     -- Just pressed: the flag may not have registered yet, and /pvp toggles.
@@ -925,20 +1013,25 @@ local function ArmReflag()
     if GetTime() - reflagPressedAt < 3 then return true end
     if not SetOverrideBindingClick or InCombatLockdown() or db.autoReflag == false then return false end
     reflagButton = reflagButton or CreateReflagButton()
-    local targets = ReflagTargets()
-    if #targets == 0 then return false end
+    local targets, buttons = ReflagTargets()
+    if #targets == 0 and not next(buttons) then return false end
     ClearOverrideBindings(reflagButton)
     for i, target in ipairs(targets) do
         reflagButton:SetAttribute("*macrotext-key" .. i, (SLASH_PVP1 or "/pvp") .. "\n" .. target.line)
         SetOverrideBindingClick(reflagButton, true, target.key, "HonorBoundReflagButton", "key" .. i)
     end
+    ShowOverlays(buttons)
     reflagArmed = true
     reflagArmedAt = reflagArmedAt or GetTime()
-    Debug(("Reflag armed on %d keys."):format(#targets))
+    Debug(("Reflag armed on %d keys and %d bar buttons."):format(#targets, (function() local n = 0 for _ in pairs(buttons) do n = n + 1 end return n end)()))
     return true
 end
 local function DisarmReflag()
-    if not reflagArmed or InCombatLockdown() then return end
+    -- The overlays hold secure buttons, so hiding them is blocked in combat
+    -- just like changing key bindings. PLAYER_REGEN_DISABLED hides them first.
+    if InCombatLockdown() then return end
+    if overlayHost and overlayHost:IsShown() then overlayHost:Hide() end
+    if not reflagArmed then return end
     ClearOverrideBindings(reflagButton)
     reflagArmed = false
     Debug("Reflag keys released.")
@@ -1124,7 +1217,7 @@ UpdatePrompt = function()
         if ArmReflag() then
             if not reflagNotified then
                 reflagNotified = true
-                Print("You're unflagged. Your next action bar key will flag you again.")
+                Print("You're unflagged. Your next action bar key or click will flag you again.")
             end
             if GetTime() - reflagArmedAt < REFLAG_POPUP_DELAY then
                 SetPromptShown(false)
@@ -1133,7 +1226,7 @@ UpdatePrompt = function()
         end
     end
     if char.sworn then
-        prompt.text:SetText("You're unflagged. Press an action bar key or click below within "
+        prompt.text:SetText("You're unflagged. Press an action bar key, click a bar button, or click below within "
             .. FormatTime(left) .. ", or your oath breaks and your crest goes.")
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
