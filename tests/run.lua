@@ -638,16 +638,29 @@ if os.getenv("SHOW_DEBUG") then for _, line in ipairs(debugLines) do print((line
 SlashCmdList.HONORBOUND("debug off")
 -- Reflag on the next keypress, and dungeons pause the countdown.
 local overrides, instance = {}, false
+local keyActions = {["1"] = "ACTIONBUTTON1", ["2"] = "ACTIONBUTTON2", ["SHIFT-Q"] = "ACTIONBUTTON2",
+    ["3"] = "CLICK BT4Button3:LeftButton", ["Z"] = "SHAPESHIFTBUTTON1", ["W"] = "MOVEFORWARD"}
 function GetBindingKey(command)
-    if command == "ACTIONBUTTON1" then return "1" end
-    if command == "ACTIONBUTTON2" then return "2", "SHIFT-Q" end
+    local keys = {}
+    for key, action in pairs(keyActions) do if action == command then keys[#keys + 1] = key end end
+    table.sort(keys)
+    return unpack(keys)
 end
-function GetBindingAction(key) return key == "3" and "CLICK BT4Button3:LeftButton" or "" end
+function GetBindingAction(key) return keyActions[key] or "" end
 function SetOverrideBindingClick(_, _, key, name, button) overrides[key] = {name = name, button = button} end
 function ClearOverrideBindings() for key in pairs(overrides) do overrides[key] = nil end end
 function IsInInstance() return instance, instance and "party" or "none" end
 function GetCVarBool(name) return name == "ActionButtonUseKeyDown" end
 ActionButton1, ActionButton2, BT4Button3 = object("ActionButton1"), object("ActionButton2"), object("BT4Button3")
+StanceButton1 = object("StanceButton1")
+-- The click overlays: secure buttons whose macro is set per mouse button.
+local function overlays()
+    local found = {}
+    for _, frame in ipairs(frames) do
+        if frame.attributes.macrotext1 then found[#found + 1] = frame end
+    end
+    return found
+end
 local function borrowed() local n = 0 for _ in pairs(overrides) do n = n + 1 end return n end
 local function macroFor(key) return HonorBoundReflagButton.attributes["*macrotext-" .. overrides[key].button] end
 local function setFlag(on) desired, units.player.flagged = on, on event("PLAYER_FLAGS_CHANGED", "player") end
@@ -663,22 +676,42 @@ advance(A.GRACE + 30)
 check(HonorBoundCharDB.sworn, "dungeon time doesn't run the countdown down")
 instance = false
 event("PLAYER_ENTERING_WORLD")
-check(borrowed() == 4 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
+check(borrowed() == 5 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
 check(not prompt.shown, "no popup while the keys are borrowed")
-check(macroFor("1") == "/pvp\n/click ActionButton1 LeftButton 1", "key 1 flags, then presses its own button: " .. tostring(macroFor("1")))
-check(macroFor("SHIFT-Q") == "/pvp\n/click ActionButton2 LeftButton 1", "second binding of a bar button")
-check(macroFor("3") == "/pvp\n/click BT4Button3 LeftButton 1", "bar addon button through its CLICK binding")
+local both = function(name) return ("/pvp\n/click %s LeftButton 1\n/click %s LeftButton"):format(name, name) end
+check(macroFor("1") == both("ActionButton1"), "key 1 flags, then presses its own button: " .. tostring(macroFor("1")))
+check(macroFor("SHIFT-Q") == both("ActionButton2"), "second binding of a bar button")
+check(macroFor("3") == both("BT4Button3"), "bar addon button through its CLICK binding")
+check(macroFor("Z") == "/pvp\n/click StanceButton1 LeftButton", "stance buttons get one click, not two: " .. tostring(macroFor("Z")))
+check(overrides["W"] == nil, "movement keys are never borrowed")
+local clickOverlays = overlays()
+check(#clickOverlays == 4, "click overlays over the bar buttons in use (" .. #clickOverlays .. ")")
+local overlayHost = clickOverlays[1].parent
+check(overlayHost.shown, "overlays shown while armed")
+local overBT4
+for _, overlay in ipairs(clickOverlays) do
+    if overlay.attributes.macrotext1 == both("BT4Button3") then overBT4 = overlay end
+end
+check(overBT4 and overBT4.attributes.macrotext2 == "/pvp\n/click BT4Button3 RightButton 1\n/click BT4Button3 RightButton", "right click passes through as a right click")
 event("PLAYER_REGEN_DISABLED")
 combat = true
 advance(2)
-check(borrowed() == 0, "keys handed back before combat")
+check(borrowed() == 0 and not overlayHost.shown, "keys and overlays handed back before combat")
+-- Flagged mid-fight: the overlay host holds secure buttons, so it isn't touched in combat.
+overlayHost.shown = true
+desired, units.player.flagged = true, true
+event("PLAYER_FLAGS_CHANGED", "player")
+check(overlayHost.shown, "overlays not hidden during combat lockdown")
+desired, units.player.flagged = false, false
+event("PLAYER_FLAGS_CHANGED", "player")
+overlayHost.shown = false
 combat = false
 event("PLAYER_REGEN_ENABLED")
-check(borrowed() == 4, "borrowed again after combat")
+check(borrowed() == 5 and overlayHost.shown, "borrowed again after combat")
 -- The press: the macro's /pvp flags you; the keys go back straight away.
 HonorBoundReflagButton.scripts.PostClick(HonorBoundReflagButton)
 blizzardPvp()
-check(borrowed() == 0, "keys handed back after one press")
+check(borrowed() == 0 and not overlayHost.shown, "keys and overlays handed back after one press")
 advance(1)
 check(borrowed() == 0, "not borrowed again while the flag registers")
 units.player.flagged = true
@@ -687,9 +720,9 @@ advance(5)
 check(borrowed() == 0 and HonorBoundCharDB.sworn and not prompt.shown, "reflagged by the keypress, oath kept")
 -- Keys unused: the popup follows.
 setFlag(false)
-check(borrowed() == 4 and not prompt.shown, "unflagged again: keys borrowed")
+check(borrowed() == 5 and not prompt.shown, "unflagged again: keys borrowed")
 advance(31)
-check(prompt.shown and prompt.flag.text == "Stay flagged" and borrowed() == 4, "popup after 30 s, keys still borrowed")
+check(prompt.shown and prompt.flag.text == "Stay flagged" and borrowed() == 5, "popup after 30 s, keys still borrowed")
 setFlag(true)
 check(borrowed() == 0 and not prompt.shown, "flagging any other way hands the keys back")
 -- Turned off: straight to the popup.
@@ -697,8 +730,8 @@ SlashCmdList.HONORBOUND("autoflag off")
 setFlag(false)
 check(borrowed() == 0 and prompt.shown, "autoflag off: popup, no borrowed keys")
 SlashCmdList.HONORBOUND("autoflag on")
-check(borrowed() == 4, "autoflag on borrows the keys")
+check(borrowed() == 5, "autoflag on borrows the keys")
 setFlag(true)
 check(borrowed() == 0, "and hands them back once flagged")
 
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug and reflag keys.")
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")
