@@ -1111,7 +1111,7 @@ local function Break(reason)
     char.pledgedSinceLevel = nil
     char.sworn, char.joining, char.graceLeft = false, nil, nil
     deadline = nil
-    Print("Oath broken (" .. reason .. "). Your crest is gone. Type /honor swear to take it again.")
+    Print("Oath broken: " .. reason .. ". Your crest is gone. Type /honor swear to take it again.")
     Announce(true)
     Refresh()
 end
@@ -1286,7 +1286,7 @@ UpdatePrompt = function()
             end
             left = deadline - GetTime()
         end
-        if left <= 0 then Break("unflagged") DisarmReflag() SetPromptShown(false) return end
+        if left <= 0 then Break("you stayed unflagged too long") DisarmReflag() SetPromptShown(false) return end
         -- Try the borrowed keys first; the popup follows if they go unused.
         if ArmReflag() then
             if not reflagNotified then
@@ -1300,8 +1300,9 @@ UpdatePrompt = function()
         end
     end
     if char.sworn then
-        prompt.text:SetText("You're unflagged. Press an action bar key, click a bar button, or click below within "
-            .. FormatTime(left) .. ", or your oath breaks and your crest goes."
+        prompt.text:SetText("You're unflagged. "
+            .. (reflagArmed and "Press an action bar key, click a bar button, or click below" or "Click below")
+            .. " within " .. FormatTime(left) .. ", or your oath breaks and your crest goes."
             .. (idle.frozen and " (Paused while you're away.)" or ""))
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
@@ -1546,19 +1547,19 @@ local function Tick()
     Refresh()
 end
 local function PrintStatus()
-    Print("Chat icons: " .. (not A.chatAvailable and "unavailable" or db.chatIcons == false and "off" or "on")
-        .. ". /honor chat on|off")
-    local level = A.PledgeLevel(char)
-    if level then Print("PvP pledged since level " .. level .. " (honor-system record).") end
     if char.sworn then
-        Print("You're sworn to RP-PvP. Flag: " .. (Desired() and "on" or "|cffff4444off|r") .. ".")
+        local level = A.PledgeLevel(char)
+        Print("You're sworn" .. (level and (" since level " .. level) or "") .. ". Flag: "
+            .. (Desired() and "on" or "|cffff4444off|r") .. ".")
     else
         Print("You haven't sworn on this character. Type /honor swear.")
     end
     local count = 0
     for _, peer in pairs(peers) do if peer.sworn then count = count + 1 end end
-    Print(count .. " sworn players heard from recently.")
-    Print(ChannelID() and "Community channel connected." or "Community channel pending; group sharing is also available.")
+    Print(Count(count, "sworn player") .. " seen recently. "
+        .. (ChannelID() and "Connected to the HonorBound channel." or "Still joining the HonorBound channel."))
+    Print("Crests in chat: " .. (not A.chatAvailable and "not supported on this client" or db.chatIcons == false and "off" or "on")
+        .. ". Reflag on your next action bar key: " .. (db.autoReflag == false and "off" or "on") .. ". /honor help for commands.")
 end
 
 SLASH_HONORBOUND1 = "/honor"
@@ -1622,8 +1623,8 @@ SlashCmdList.HONORBOUND = function(input)
         if chatCommand == "on" then db.chatIcons = true
         elseif chatCommand == "off" then db.chatIcons = false
         elseif chatCommand ~= "" then Print("Use /honor chat on or /honor chat off.") return end
-        Print(not A.chatAvailable and "Chat icons unavailable: this client lacks the sender-name filter API."
-            or (db.chatIcons == false and "Chat icons off." or "Chat icons on (recent advertised pledge)."))
+        Print(not A.chatAvailable and "Crests in chat aren't supported on this client."
+            or (db.chatIcons == false and "Crests in chat off." or "Crests in chat on."))
         return
     end
     if not db then return end
@@ -1641,13 +1642,13 @@ SlashCmdList.HONORBOUND = function(input)
         if arg ~= "confirm" then
             Print("This breaks your oath and removes your crest. Type /honor renounce confirm to proceed.")
         else
-            Break("renounced")
+            Break("you renounced it")
             char.declined = true
         end
     elseif command == "autoflag" then
         if arg == "on" then db.autoReflag = true
         elseif arg == "off" then db.autoReflag = false DisarmReflag() end
-        Print("Reflag on your next action key: " .. (db.autoReflag == false and "off" or "on")
+        Print("Reflag on your next action bar key: " .. (db.autoReflag == false and "off" or "on")
             .. ". /honor autoflag on|off")
         UpdatePrompt()
     elseif command == "plates" then
@@ -1657,18 +1658,20 @@ SlashCmdList.HONORBOUND = function(input)
         local value = tonumber(arg)
         if not value or value < 0.6 or value > 2 then Print("Use /honor scale 0.6–2") return end
         db.scale = value
+        Print("Crest size set to " .. value .. ".")
     elseif command == "offset" then
         local x, y = arg:match("^(%-?%d+)%s+(%-?%d+)$")
         x, y = tonumber(x), tonumber(y)
         if not x or not y or math.abs(x) > 200 or math.abs(y) > 200 then Print("Use /honor offset X Y (−200 to 200)") return end
         db.offsetX, db.offsetY = x, y
+        Print(("Crest moved to %d, %d from the PvP icon."):format(x, y))
     elseif command == "reset" then
         db.scale, db.offsetX, db.offsetY, db.plates = 1, 0, 0, true
-        Print("Badge placement reset.")
+        Print("Crest size and position reset, and nameplate crests turned on.")
     elseif command == "" or command == "status" then
         PrintStatus()
     else
-        Print("/honor · /honor swear · /honor renounce · /honor autoflag · /honor plates · /honor scale 1 · /honor offset 0 0 · /honor reset")
+        Print("Commands: /honor (status), /honor swear, /honor renounce, /honor autoflag on|off, /honor plates, /honor chat on|off, /honor scale 0.6-2, /honor offset X Y, /honor reset.")
     end
     Refresh()
 end

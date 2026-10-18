@@ -747,8 +747,10 @@ check(borrowed() == 0 and not prompt.shown, "flagging any other way hands the ke
 SlashCmdList.HONORBOUND("autoflag off")
 setFlag(false)
 check(borrowed() == 0 and prompt.shown, "autoflag off: popup, no borrowed keys")
+check(not prompt.text.text:find("action bar key", 1, true), "autoflag off: the popup doesn't send you to keys that won't flag you")
 SlashCmdList.HONORBOUND("autoflag on")
 check(borrowed() == 5, "autoflag on borrows the keys")
+check(prompt.text.text:find("action bar key", 1, true), "autoflag on: the popup mentions the keys")
 setFlag(true)
 check(borrowed() == 0, "and hands them back once flagged")
 
