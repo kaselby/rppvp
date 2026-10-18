@@ -745,10 +745,11 @@ local function lookAt(guid, name, realm, guidName, guidRealm)
     event("UPDATE_MOUSEOVER_UNIT")
 end
 lookAt("Player-98-A00001", "Same", "Far Realm", "Same", "Far Realm")
-lookAt("Player-98-A00002", "Split", "Far Realm", "Split", "")
+-- Forever: the surname comes back as the unit's realm, the GUID gives "First Surname".
+lookAt("Player-98-A00002", "Split", "Surname", "Split Surname", "Far Realm")
 local log = HonorBoundDB.nameAudit.players
 check(#log == 2 and not log[1].differ and log[2].differ, "matching and differing addresses recorded")
-check(log[2].probeAddress == "Split-FarRealm" and log[2].replyAddress == "Split", "both addresses kept")
+check(log[2].probeAddress == "Split-Surname" and log[2].replyAddress == "Split Surname-FarRealm", "both addresses kept")
 local before, bounced = #sent, nil
 local targets = {}
 for _ = 1, 40 do
@@ -756,14 +757,15 @@ for _ = 1, 40 do
     for i = before + 1, #sent do
         if sent[i].message == "t" then
             targets[sent[i].target] = true
-            if sent[i].target == "Split" and bounced == nil then
-                bounced = systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Split' is currently playing.")
+            if sent[i].target == "Split Surname-FarRealm" and bounced == nil then
+                bounced = systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Split Surname-FarRealm' is currently playing.")
             end
         end
     end
     before = #sent
 end
-check(targets["Same-FarRealm"] and targets["Split-FarRealm"] and targets["Split"], "test whispers to the control and both mismatched addresses")
+check(targets["Same-FarRealm"] and targets["Split-Surname"] and targets["Split-FarRealm"] and targets["Split Surname-FarRealm"], "test whispers to the control and all three addresses")
+check(log[2].standardAddress == "Split-FarRealm", "first-name-realm address recorded")
 check(bounced == true, "the test bounce is caught and hidden")
 check(log[2].replyResult == "BOUNCED (no player named)" and log[2].probeResult == "no error (reached)"
     and log[1].probeResult == "no error (reached)", "bounced reply address, reached probe and control addresses")

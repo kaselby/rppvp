@@ -486,9 +486,13 @@ function Audit.Unit(unit, guid)
     local n, r = UnitName(unit)
     local _, _, _, _, _, gn, gr = GetPlayerInfoByGUID(guid)
     local fromUnit, fromGuid = FullName(n, r), GuidName(guid)
+    -- Standard cross-realm form: first name only, plus the GUID's realm.
+    local first = type(n) == "string" and not Secret(n) and n:match("^[^%s%-]+")
+    local standard = first and FullName(first, gr)
     local differ = fromUnit ~= fromGuid
     local record = {server = Server(guid), unitName = Audit.Raw(n), unitRealm = Audit.Raw(r), guidName = Audit.Raw(gn),
-        guidRealm = Audit.Raw(gr), probeAddress = Audit.Raw(fromUnit), replyAddress = Audit.Raw(fromGuid), differ = differ}
+        guidRealm = Audit.Raw(gr), probeAddress = Audit.Raw(fromUnit), replyAddress = Audit.Raw(fromGuid),
+        standardAddress = Audit.Raw(standard), differ = differ}
     local log = audit.log
     log.players[#log.players + 1] = record
     if differ then audit.differ = audit.differ + 1 else audit.match = audit.match + 1 end
@@ -502,8 +506,11 @@ function Audit.Unit(unit, guid)
     if not differ and audit.controls >= Audit.maxControls then return end
     audit.tested = audit.tested + 1
     if not differ then audit.controls = audit.controls + 1 end
-    for kind, address in pairs({probe = fromUnit, reply = fromGuid}) do
-        if type(address) == "string" and not (kind == "reply" and not differ) then
+    local tried = {}
+    for _, t in ipairs({{"probe", fromUnit}, {"standard", standard}, {"reply", fromGuid}}) do
+        local kind, address = t[1], t[2]
+        if type(address) == "string" and not tried[address] then
+            tried[address] = true
             audit.queue[#audit.queue + 1] = {kind = kind, address = address, record = record}
         end
     end
@@ -551,17 +558,17 @@ function Audit.Whisper(kind, sender, known, probedName, replyTo)
 end
 function Audit.Summary()
     if not audit then return "Name test is off. /honor nametest to start." end
-    local bounced, reached = {probe = 0, reply = 0}, {probe = 0, reply = 0}
+    local bounced, reached = {probe = 0, reply = 0, standard = 0}, {probe = 0, reply = 0, standard = 0}
     for _, r in ipairs(audit.log.players) do
-        for _, kind in ipairs({"probe", "reply"}) do
+        for _, kind in ipairs({"probe", "reply", "standard"}) do
             local result = r[kind .. "Result"]
             if result and result:find("^BOUNCED") then bounced[kind] = bounced[kind] + 1
             elseif result and result:find("^no error") then reached[kind] = reached[kind] + 1 end
         end
     end
-    return ("Name test: %d players from other realms seen, %d with matching addresses, %d DIFFERENT. Test whispers: probe addresses %d reached / %d bounced; reply addresses %d reached / %d bounced. %d probes and replies from addon users logged.")
+    return ("Name test: %d players from other realms seen, %d with matching addresses, %d DIFFERENT. Test whispers: probe addresses %d reached / %d bounced; reply addresses %d reached / %d bounced; first-name-realm %d reached / %d bounced. %d probes and replies from addon users logged.")
         :format(audit.match + audit.differ, audit.match, audit.differ, reached.probe, bounced.probe,
-            reached.reply, bounced.reply, #audit.log.whispers)
+            reached.reply, bounced.reply, reached.standard, bounced.standard, #audit.log.whispers)
 end
 
 local function QueryUnit(unit, priority)
