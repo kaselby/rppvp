@@ -129,6 +129,8 @@ C_Timer = {
     After = function(delay, callback) tasks[#tasks + 1] = {at = now + delay, callback = callback} end,
     NewTicker = function(_, callback) tickers[#tickers + 1] = callback end,
 }
+date = os.date
+function GetRealmName() return "Home Realm" end
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
 local events = frames[1]
 local prompt = HonorBoundPrompt
@@ -733,5 +735,39 @@ SlashCmdList.HONORBOUND("autoflag on")
 check(borrowed() == 5, "autoflag on borrows the keys")
 setFlag(true)
 check(borrowed() == 0, "and hands them back once flagged")
+
+-- Name audit: unit address vs GUID address for players from other realms.
+SlashCmdList.HONORBOUND("nametest")
+check(HonorBoundDB.nameAudit and #HonorBoundDB.nameAudit.players == 0, "name test starts a fresh log")
+local function lookAt(guid, name, realm, guidName, guidRealm)
+    players[guid] = {name = guidName, realm = guidRealm}
+    units.mouseover = {guid = guid, flagged = true, faction = units.player.faction, name = name, realm = realm}
+    event("UPDATE_MOUSEOVER_UNIT")
+end
+lookAt("Player-98-A00001", "Same", "Far Realm", "Same", "Far Realm")
+lookAt("Player-98-A00002", "Split", "Far Realm", "Split", "")
+local log = HonorBoundDB.nameAudit.players
+check(#log == 2 and not log[1].differ and log[2].differ, "matching and differing addresses recorded")
+check(log[2].probeAddress == "Split-FarRealm" and log[2].replyAddress == "Split", "both addresses kept")
+local before, bounced = #sent, nil
+local targets = {}
+for _ = 1, 40 do
+    advance(1)
+    for i = before + 1, #sent do
+        if sent[i].message == "t" then
+            targets[sent[i].target] = true
+            if sent[i].target == "Split" and bounced == nil then
+                bounced = systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Split' is currently playing.")
+            end
+        end
+    end
+    before = #sent
+end
+check(targets["Same-FarRealm"] and targets["Split-FarRealm"] and targets["Split"], "test whispers to the control and both mismatched addresses")
+check(bounced == true, "the test bounce is caught and hidden")
+check(log[2].replyResult == "BOUNCED (no player named)" and log[2].probeResult == "no error (reached)"
+    and log[1].probeResult == "no error (reached)", "bounced reply address, reached probe and control addresses")
+SlashCmdList.HONORBOUND("nametest off")
+check(HonorBoundDB.nameAudit.players[2].differ, "results survive turning the test off")
 
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")

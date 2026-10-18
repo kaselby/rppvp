@@ -469,9 +469,105 @@ local function Query(guid, priority, name)
         SimProbe(guid)
     end
 end
+-- Name audit (/honor nametest). Probes are addressed from the unit's name;
+-- replies from GetPlayerInfoByGUID or the incoming sender. For each player
+-- from another realm in view, record both addresses, and for a few of them
+-- send an invisible whisper on an unused prefix to each address: a "No player
+-- named" error means that address bounces. Results go to HonorBoundDB.nameAudit.
+local Audit = {prefix = "HBNAMETEST", maxTested = 15, maxControls = 3, wait = 5}
+local audit -- nil while off
+function Audit.Raw(value)
+    if Secret(value) then return "<secret>" end
+    return value == nil and "<nil>" or tostring(value)
+end
+function Audit.Unit(unit, guid)
+    if not audit or audit.seen[guid] or not OtherRealm(guid) then return end
+    audit.seen[guid] = true
+    local n, r = UnitName(unit)
+    local _, _, _, _, _, gn, gr = GetPlayerInfoByGUID(guid)
+    local fromUnit, fromGuid = FullName(n, r), GuidName(guid)
+    local differ = fromUnit ~= fromGuid
+    local record = {server = Server(guid), unitName = Audit.Raw(n), unitRealm = Audit.Raw(r), guidName = Audit.Raw(gn),
+        guidRealm = Audit.Raw(gr), probeAddress = Audit.Raw(fromUnit), replyAddress = Audit.Raw(fromGuid), differ = differ}
+    local log = audit.log
+    log.players[#log.players + 1] = record
+    if differ then audit.differ = audit.differ + 1 else audit.match = audit.match + 1 end
+    Debug(("Name test: %s. Probe address %s, reply address %s%s."):format(record.unitName, record.probeAddress,
+        record.replyAddress, differ and " |cffff4444(DIFFERENT)|r" or " (same)"))
+    -- Test every mismatch, plus a few matches as a control for the method.
+    -- Whispers can't cross factions, so only same-faction players are tested.
+    local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+    record.sameFaction = not Secret(theirs) and theirs == ours
+    if not record.sameFaction or audit.tested >= Audit.maxTested then return end
+    if not differ and audit.controls >= Audit.maxControls then return end
+    audit.tested = audit.tested + 1
+    if not differ then audit.controls = audit.controls + 1 end
+    for kind, address in pairs({probe = fromUnit, reply = fromGuid}) do
+        if type(address) == "string" and not (kind == "reply" and not differ) then
+            audit.queue[#audit.queue + 1] = {kind = kind, address = address, record = record}
+        end
+    end
+end
+function Audit.Pump(now)
+    if not audit then return end
+    for i = #audit.waiting, 1, -1 do
+        local t = audit.waiting[i]
+        if now - t.at > Audit.wait then
+            table.remove(audit.waiting, i)
+            t.record[t.kind .. "Result"] = "no error (reached)"
+            Debug("Name test: whisper to " .. t.address .. " (" .. t.kind .. " address) went through.")
+        end
+    end
+    if not audit.queue[1] or now - audit.last < 2 or not Afford(1) then return end
+    local t = table.remove(audit.queue, 1)
+    audit.last, t.at = now, now
+    Refill()
+    tokens = math.max(-TOKEN_MAX, tokens - 1)
+    local result = C_ChatInfo.SendAddonMessage(Audit.prefix, "t", "WHISPER", t.address)
+    if result == true or result == 0 then
+        audit.waiting[#audit.waiting + 1] = t
+    else
+        t.record[t.kind .. "Result"] = "send refused: " .. Audit.Raw(result)
+    end
+end
+-- A bounce for one of our test whispers. Returns true to hide the error.
+function Audit.Bounce(message)
+    if not audit then return end
+    for i, t in ipairs(audit.waiting) do
+        if message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(t.address) then
+            table.remove(audit.waiting, i)
+            t.record[t.kind .. "Result"] = "BOUNCED (no player named)"
+            Debug("Name test: whisper to " .. t.address .. " (" .. t.kind .. " address) |cffff4444bounced|r.")
+            return true
+        end
+    end
+end
+function Audit.Whisper(kind, sender, known, probedName, replyTo)
+    if not audit then return end
+    local w = audit.log.whispers
+    if #w >= 50 then return end
+    w[#w + 1] = {kind = kind, sender = Audit.Raw(sender), guidAddress = Audit.Raw(known), probedAddress = Audit.Raw(probedName),
+        replyTo = Audit.Raw(replyTo), at = date("%H:%M:%S")}
+end
+function Audit.Summary()
+    if not audit then return "Name test is off. /honor nametest to start." end
+    local bounced, reached = {probe = 0, reply = 0}, {probe = 0, reply = 0}
+    for _, r in ipairs(audit.log.players) do
+        for _, kind in ipairs({"probe", "reply"}) do
+            local result = r[kind .. "Result"]
+            if result and result:find("^BOUNCED") then bounced[kind] = bounced[kind] + 1
+            elseif result and result:find("^no error") then reached[kind] = reached[kind] + 1 end
+        end
+    end
+    return ("Name test: %d players from other realms seen, %d with matching addresses, %d DIFFERENT. Test whispers: probe addresses %d reached / %d bounced; reply addresses %d reached / %d bounced. %d probes and replies from addon users logged.")
+        :format(audit.match + audit.differ, audit.match, audit.differ, reached.probe, bounced.probe,
+            reached.reply, bounced.reply, #audit.log.whispers)
+end
+
 local function QueryUnit(unit, priority)
     local guid = GUID(unit)
     if not guid or guid == myGUID or not UnitIsPlayer(unit) then return end
+    Audit.Unit(unit, guid)
     if OtherRealm(guid) then
         -- Whispers can't cross factions; skip anyone we couldn't reach anyway.
         local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
@@ -592,6 +688,7 @@ local function PumpProbes()
     if Locked() or not myGUID then return end
     PumpWhispers(now)
     PumpShares(now)
+    Audit.Pump(now)
 end
 
 local function OnWhisper(message, sender)
@@ -619,6 +716,7 @@ local function OnWhisper(message, sender)
     -- If our probe already reached them they have our status; otherwise answer.
     local queued = false
     for _, r in ipairs(replies) do queued = queued or r.name == name end
+    Audit.Whisper(kind == "Q" and "probe in" or "reply in", sender, known, probed and probed.name, name)
     if kind == "Q" and not probed and not queued and #replies < REPLY_MAX
         and not (replied[name] and now - replied[name] < REPLY_GAP) then
         replies[#replies + 1] = {name = name, at = now}
@@ -702,6 +800,7 @@ end
 -- A probe to someone unreachable comes back as a system error; hide it.
 local function HideUnreachable(_, _, message)
     if Secret(message) or type(message) ~= "string" or not ERR_CHAT_PLAYER_NOT_FOUND_S then return end
+    if Audit.Bounce(message) then return true end
     for guid, p in pairs(pending) do
         if message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(p.name) then
             pending[guid] = nil
@@ -712,7 +811,14 @@ local function HideUnreachable(_, _, message)
     end
     local now = GetTime()
     for name, at in pairs(replied) do
-        if now - at < 5 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then return true end
+        if now - at < 5 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then
+            if audit then
+                local w = audit.log.whispers
+                w[#w + 1] = {kind = "REPLY BOUNCED", replyTo = name, at = date("%H:%M:%S")}
+                Debug("Name test: our reply to " .. name .. " |cffff4444bounced|r.")
+            end
+            return true
+        end
     end
 end
 -- Load the saved caches, dropping anything expired or malformed.
@@ -1536,6 +1642,24 @@ SlashCmdList.HONORBOUND = function(input)
     end
     if (input or ""):lower():match("^%s*chatcheck%s*$") then
         A.ChatCheck(Print)
+        return
+    end
+    local testCommand = (input or ""):lower():match("^%s*nametest%s*(.-)%s*$")
+    if testCommand ~= nil then
+        if testCommand == "off" then
+            Print(Audit.Summary())
+            audit = nil
+            Print("Name test off. Results stay saved until the next /honor nametest.")
+        elseif audit then
+            Print(Audit.Summary())
+        else
+            db.nameAudit = {started = date("%Y-%m-%d %H:%M"), version = A.VERSION, myServer = Audit.Raw(myServer),
+                myRealm = Audit.Raw(GetRealmName()), players = {}, whispers = {}}
+            audit = {seen = {}, queue = {}, waiting = {}, last = 0, match = 0, differ = 0, tested = 0,
+                controls = 0, log = db.nameAudit}
+            debugEnabled = true
+            Print("Name test on (debug on too). It checks everyone from another realm who comes into view: walk somewhere busy. /honor nametest shows the tally, /honor nametest off stops. Results save on /reload or logout.")
+        end
         return
     end
     local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")
