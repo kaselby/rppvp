@@ -1,5 +1,5 @@
 local _, Addon = ...
-Addon.VERSION = "0.4.5-beta1"
+Addon.VERSION = "0.4.5"
 Addon.PREFIX = "HONORBOUND1"
 Addon.CHANNEL = "HonorBound"
 Addon.TTL = 300     -- seconds before a silent peer is forgotten
