@@ -726,9 +726,19 @@ units.player.flagged = true
 event("PLAYER_FLAGS_CHANGED", "player")
 advance(5)
 check(borrowed() == 0 and HonorBoundCharDB.sworn and not prompt.shown, "reflagged by the keypress, oath kept")
--- Keys unused: the popup follows.
+-- Turned off by hand: the popup asks at once, and the keys still work.
 setFlag(false)
-check(borrowed() == 5 and not prompt.shown, "unflagged again: keys borrowed")
+check(borrowed() == 5 and prompt.shown and prompt.flag.text == "Stay flagged", "manual unflag: popup at once, keys borrowed")
+setFlag(true)
+-- Flag lost to a zone change (no flag wanted when we last looked): keys first, popup after 30 s.
+instance = true
+event("PLAYER_ENTERING_WORLD")
+setFlag(false)
+advance(2)
+instance = false
+event("PLAYER_ENTERING_WORLD")
+advance(1)
+check(borrowed() == 5 and not prompt.shown, "after a dungeon: keys borrowed, no popup yet")
 advance(31)
 check(prompt.shown and prompt.flag.text == "Stay flagged" and borrowed() == 5, "popup after 30 s, keys still borrowed")
 setFlag(true)

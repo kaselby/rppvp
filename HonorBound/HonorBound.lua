@@ -935,6 +935,9 @@ function idle.Poll()
     end
 end
 function idle.Away() return GetTime() - idle.last >= idle.after end
+-- You turned the flag off yourself (portrait menu or /pvp) rather than the
+-- game doing it on a zone change: ask straight away, don't wait for a key.
+idle.manual, idle.wasDesired = false, nil
 local function InPausedInstance()
     if not IsInInstance then return false end
     local inside, kind = IsInInstance()
@@ -1225,7 +1228,11 @@ end
 UpdatePrompt = function()
     if not char or not prompt then return end
     prompt.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
-    if Desired() then
+    local desired = Desired()
+    if idle.wasDesired and not desired and not InPausedInstance() then idle.manual = true end
+    idle.wasDesired = desired
+    if desired then
+        idle.manual = false
         deadline, char.graceLeft = nil, nil
         reflagArmedAt, reflagNotified = nil, nil
         DisarmReflag()
@@ -1254,8 +1261,9 @@ UpdatePrompt = function()
         return
     end
     if char.sworn and InPausedInstance() then
-        -- You can't reflag inside; the countdown starts fresh outside.
-        deadline, char.graceLeft, reflagArmedAt = nil, nil, nil
+        -- You can't reflag inside; the countdown starts fresh outside. A flag
+        -- that dropped during the loading screen wasn't you.
+        deadline, char.graceLeft, reflagArmedAt, idle.manual = nil, nil, nil, false
         DisarmReflag()
         SetPromptShown(false)
         return
@@ -1285,7 +1293,7 @@ UpdatePrompt = function()
                 reflagNotified = true
                 Print("You're unflagged. Your next action bar key or click will flag you again.")
             end
-            if GetTime() - reflagArmedAt < REFLAG_POPUP_DELAY then
+            if not idle.manual and GetTime() - reflagArmedAt < REFLAG_POPUP_DELAY then
                 SetPromptShown(false)
                 return
             end
