@@ -8,6 +8,10 @@ or streaks: you're either sworn and flagged, or you aren't.
 
 ## Install and share
 
+**[Download HonorBound.zip](https://github.com/kaselby/rppvp/releases/latest/download/HonorBound.zip)**
+(latest release). Don't use GitHub's green "Code → Download ZIP" button:
+that's the whole project, not the addon.
+
 Extract `HonorBound.zip` into your Forever client's `Interface/AddOns`
 folder. The result must be `Interface/AddOns/HonorBound/HonorBound.toc`.
 Fully restart WoW and enable **HonorBound** at character select. Share
