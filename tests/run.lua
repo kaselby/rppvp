@@ -80,6 +80,7 @@ TargetFrame.pvpIcon = object()
 FocusFrame.TargetFrameContainer = { Portrait = object() }
 FocusFrame.pvpIcon = object()
 GameTooltip = object()
+function GameTooltip:AddLine(text) tooltipLines[#tooltipLines + 1] = text end
 local plate = object()
 plate.UnitFrame = object()
 plate.UnitFrame.name = object()
@@ -129,6 +130,13 @@ C_Timer = {
     After = function(delay, callback) tasks[#tasks + 1] = {at = now + delay, callback = callback} end,
     NewTicker = function(_, callback) tickers[#tickers + 1] = callback end,
 }
+-- Tooltips: capture the unit post-call and the lines it adds.
+Enum = { TooltipDataType = { Unit = 1 } }
+TooltipDataProcessor = { AddTooltipPostCall = function(_, callback) tooltipCallback = callback end }
+tooltipLines = {}
+-- Activity for away protection: the player is active unless a test says not.
+moving = true
+function IsPlayerMoving() return moving end
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
 local events = frames[1]
 local prompt = HonorBoundPrompt
@@ -844,5 +852,65 @@ addon("WR|1|" .. cn .. "|0|0|0.4.3", "Gave Up-ClassicBetaPvE")
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(not plate.UnitFrame.HonorBoundCrest.shown and not HonorBoundDB.likely[cn].sworn, "a 'not sworn' answer removes the crest and the saved status")
 units.nameplate1 = nil
+
+-- 0.4.3: away protection. Unflagged and idle, the grace countdown waits.
+SlashCmdList.HONORBOUND("autoflag off")
+HonorBoundCharDB.sworn = true
+moving = false
+setFlag(false)
+advance(A.GRACE + 60)
+check(HonorBoundCharDB.sworn, "idle while unflagged: the oath holds past the grace period")
+check(prompt.text.text:find("Paused while you're away", 1, true), "the popup says the countdown is paused")
+moving = true
+advance(A.GRACE - 60)
+check(HonorBoundCharDB.sworn, "active again: the countdown resumes from where it stopped")
+advance(70)
+check(not HonorBoundCharDB.sworn, "and breaks the oath once the rest runs out")
+-- Casting counts as activity even standing still.
+HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
+setFlag(true)
+moving = false
+setFlag(false)
+for _ = 1, A.GRACE + 5 do
+    event("UNIT_SPELLCAST_SUCCEEDED", "player")
+    advance(1)
+end
+check(not HonorBoundCharDB.sworn, "casting while standing still keeps the countdown running")
+-- Chatting doesn't.
+HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
+setFlag(true)
+setFlag(false)
+for _ = 1, A.GRACE + 5 do
+    event("CHAT_MSG_SAY", "afk", "Me", "", "", "Me", "", 0, 0, "", 0, 1, me)
+    advance(1)
+end
+check(HonorBoundCharDB.sworn, "chatting alone counts as away")
+moving = true
+setFlag(true)
+SlashCmdList.HONORBOUND("autoflag on")
+
+-- 0.4.3: the saved status keeps the pledge level, and a claimed level above
+-- the player's current level isn't shown.
+local tl = "Player-96-C0C010"
+players[tl] = { name = "Tip Level", realm = "ClassicBetaPvE" }
+addon("WQ|1|" .. tl .. "|1|12|0.4.3", "Tip Level-ClassicBetaPvE")
+check(HonorBoundDB.likely[tl].level == 12, "pledge level saved with the status")
+local function tooltipFor(guid, name, realm)
+    units.target = { guid = guid, flagged = true, faction = units.player.faction, name = name, realm = realm }
+    tooltipLines = {}
+    tooltipCallback(GameTooltip)
+    return table.concat(tooltipLines, " / ")
+end
+check(tooltipCallback ~= nil, "tooltip hook installed")
+check(tooltipFor(tl, "Tip", "Level"):find("since level 12", 1, true), "fresh answer: level in the tooltip")
+local tc = "Player-96-C0C011"
+HonorBoundDB.likely[tc] = { name = "Tip-Cached", seen = time(), sworn = true, level = 8 }
+check(tooltipFor(tc, "Tip", "Cached"):find("since level 8", 1, true), "saved status: level in the tooltip too")
+local tx = "Player-96-C0C012"
+players[tx] = { name = "Tall Tale", realm = "ClassicBetaPvE" }
+addon("WQ|1|" .. tx .. "|1|40|0.4.3", "Tall Tale-ClassicBetaPvE")
+local shown = tooltipFor(tx, "Tall", "Tale")
+check(shown:find("Sworn to RP-PvP", 1, true) and not shown:find("level 40", 1, true), "a level above their current one (20) isn't shown")
+units.target = nil
 
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")

@@ -641,7 +641,8 @@ local function OnWhisper(message, sender)
     TimeResult("answer", guid)
     -- Senders can arrive without a realm; prefer a full Name-Realm.
     local name = (probed and probed.name) or known or sender
-    if ValidName(name) then likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil} end
+    if ValidName(name) then likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil,
+        level = peer.pledgedSinceLevel} end
     Unqueue(guid)
     ShareFound(guid, name, peer)
     ChatChanged(guid)
@@ -674,7 +675,8 @@ local function OnShare(message)
             peers[guid] = A.MergePledgePeer(current, peer, now, true)
         end
         names[guid], noAddon[guid] = name, nil
-        likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil}
+        likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil,
+            level = peer.pledgedSinceLevel}
         Unqueue(guid)
         ChatChanged(guid)
         Refresh()
@@ -850,7 +852,9 @@ local function Status(unit)
         return
     end
     -- Nothing fresh: their saved status, while the re-check is out.
-    if Cached(guid) and Flagged(unit) then return {sworn = true, cached = true} end
+    if Cached(guid) and Flagged(unit) then
+        return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
+    end
 end
 -- Normal crest, or the debug overlay: light grey while being asked, dark grey
 -- once marked no-addon.
@@ -916,6 +920,21 @@ for i = 0, 9 do COMMON_KEYS[#COMMON_KEYS + 1] = "NUMPAD" .. i end
 local reflagButton, reflagArmed, reflagArmedAt, reflagNotified
 local reflagPressedAt = -100
 
+-- Away protection: while you're unflagged and doing nothing, the grace
+-- countdown waits. Moving, turning, casting, combat or looting is activity;
+-- chatting isn't. idle.after seconds without any of it counts as away.
+local idle = {last = GetTime(), after = 30}
+function idle.Note() idle.last = GetTime() end
+function idle.Poll()
+    if IsPlayerMoving and IsPlayerMoving() then idle.Note() end
+    if UnitAffectingCombat and UnitAffectingCombat("player") then idle.Note() end
+    local facing = GetPlayerFacing and GetPlayerFacing()
+    if type(facing) == "number" and not Secret(facing) then
+        if idle.facing and math.abs(facing - idle.facing) > 0.01 then idle.Note() end
+        idle.facing = facing
+    end
+end
+function idle.Away() return GetTime() - idle.last >= idle.after end
 local function InPausedInstance()
     if not IsInInstance then return false end
     local inside, kind = IsInInstance()
@@ -1249,6 +1268,14 @@ UpdatePrompt = function()
         else
             -- Logged in unflagged: grace left from an earlier session carries over.
             deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
+            idle.Poll()
+            if idle.Away() then
+                -- Away: hold the countdown where it was.
+                idle.frozen = idle.frozen or math.max(0, deadline - GetTime())
+                deadline = GetTime() + idle.frozen
+            else
+                idle.frozen = nil
+            end
             left = deadline - GetTime()
         end
         if left <= 0 then Break("unflagged") DisarmReflag() SetPromptShown(false) return end
@@ -1266,7 +1293,8 @@ UpdatePrompt = function()
     end
     if char.sworn then
         prompt.text:SetText("You're unflagged. Press an action bar key, click a bar button, or click below within "
-            .. FormatTime(left) .. ", or your oath breaks and your crest goes.")
+            .. FormatTime(left) .. ", or your oath breaks and your crest goes."
+            .. (idle.frozen and " (Paused while you're away.)" or ""))
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
     else
@@ -1295,6 +1323,9 @@ local function TooltipLines(tooltip, unit)
         level = A.PledgeLevel(char)
     else
         level = A.PeerPledgeLevel(Status(unit), GetTime())
+        -- A claim older than the level they are now can't be true.
+        local now = UnitLevel(unit)
+        if level and type(now) == "number" and not Secret(now) and now > 0 and level > now then level = nil end
     end
     if level then
         tooltip:AddLine("PvP pledged since level " .. level, 0.85, 0.85, 0.85)
@@ -1646,6 +1677,10 @@ end
 local probeChat = {CHAT_MSG_SAY = true, CHAT_MSG_YELL = true, CHAT_MSG_EMOTE = true,
     CHAT_MSG_CHANNEL = true, CHAT_MSG_WHISPER = true}
 for event in pairs(probeChat) do eventFrame:RegisterEvent(event) end
+-- Combat is polled (PLAYER_REGEN_DISABLED has its own handler below).
+idle.events = {PLAYER_STARTED_MOVING = true, UNIT_SPELLCAST_SENT = true, UNIT_SPELLCAST_SUCCEEDED = true,
+    LOOT_OPENED = true}
+for event in pairs(idle.events) do eventFrame:RegisterEvent(event) end
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         HonorBoundDB = type(HonorBoundDB) == "table" and HonorBoundDB or {}
@@ -1695,6 +1730,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         return
     elseif event == "PLAYER_LOGOUT" then
         if char.sworn and deadline then char.graceLeft = math.max(0, deadline - GetTime()) end
+    elseif idle.events[event] then
+        local unit = ...
+        if not event:find("^UNIT_") or unit == "player" then idle.Note() end
     elseif event == "CHAT_MSG_ADDON" then
         OnMessage(...)
     elseif probeChat[event] then

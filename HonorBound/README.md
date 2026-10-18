@@ -30,6 +30,9 @@ or you'll get two sets of flag prompts.
   minutes to reflag. The countdown carries over if you log out, and it pauses
   inside dungeons and raids, where you can't reflag; it starts fresh when you
   leave.
+- The countdown also waits while you're away: if you're unflagged and haven't
+  moved, turned, cast, fought or looted for 30 seconds, it holds until you do
+  something again. Chatting doesn't count as activity.
 - Reflagging takes no extra step: while you're unflagged, your next action
   bar key or click on an action bar button flags you and still uses the
   ability. Movement keys are never touched. If you don't use one within 30
@@ -41,12 +44,15 @@ or you'll get two sets of flag prompts.
 
 ## The crest
 
-A blue (Alliance) or red (Horde) shield with crossed swords **replaces the
-PvP icon** on the player, target and focus frames. A smaller copy sits just
-left of the name on sworn players' nameplates, and the same crest appears
-before sworn players' names in chat, including whispers (both ways), yells and
-emotes (faction read from their race; your own faction if unknown). Hover the crest or the player for a "Sworn to RP-PvP"
-line.
+A blue (Alliance) or red (Horde) shield with crossed swords **replaces the PvP
+icon** on the player, target and focus frames. A smaller copy sits just left
+of the name on sworn players' nameplates, and the same crest appears before
+sworn players' names in chat, including whispers (both ways), yells and emotes
+(faction read from their race; your own faction if unknown). Hover the crest
+or the player for a "Sworn to RP-PvP" line. If their addon reports the level
+they swore at, it reads "PvP pledged since level N" instead. That level is
+self-reported (an honor-system record, reset when an oath breaks), and a claim
+above the player's current level isn't shown.
 
 A player wears the crest only when two things are true: their addon says
 they're sworn, and the server reports them flagged right now (`UnitIsPVP`).
