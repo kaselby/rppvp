@@ -13,7 +13,12 @@ or streaks: you're either sworn and flagged, or you aren't.
 that's the whole project, not the addon.
 
 Extract `HonorBound.zip` into your Forever client's `Interface/AddOns`
-folder. The result must be `Interface/AddOns/HonorBound/HonorBound.toc`.
+folder. Forever runs from the **`_classic_beta_`** folder, not
+`_classic_era_`, so the result must be
+`World of Warcraft/_classic_beta_/Interface/AddOns/HonorBound/HonorBound.toc`.
+To find the folder, click the gear next to Play in the Battle.net app and
+choose **Show in Explorer** (Windows) or **Show in Finder** (Mac). Create the
+`Interface/AddOns` folders if they don't exist yet.
 Fully restart WoW and enable **HonorBound** at character select. Share
 the ZIP with your community: both players need the addon to see each other's
 crests. HonorBound replaces the separate RP-PvP addon; don't run both,
@@ -50,6 +55,11 @@ line.
 A player wears the crest only when two things are true: their addon says
 they're sworn, and the server reports them flagged right now (`UnitIsPVP`).
 An unflagged player never shows a crest, whatever their addon claims.
+
+Players from other realms you've met before show their crest as soon as you
+see them, from their saved oath status, while the addon checks again in the
+background. A "not sworn" answer removes it at once; two unanswered checks in
+a row remove it too.
 
 ## Commands
 
@@ -130,14 +140,16 @@ player's whisper result serve their whole realm.
 | Your own `F` / `N` echoing back | Ignored |
 
 A badge shows only when the player is a known addon user, has sworn, was
-heard from in the last 5 minutes, **and** is PvP-flagged right now (`UnitIsPVP`).
+heard from in the last 5 minutes (or, for a remembered user not yet heard from
+this time, was sworn when last heard and hasn't missed two re-checks in a row),
+**and** is PvP-flagged right now (`UnitIsPVP`). Chat can't check the flag.
 
 ### What gets remembered
 
 | List | Holds | Lasts | Saved |
 |---|---|---|---|
 | Known players | Status of addon users heard from | 5 min | No |
-| Remembered addon users | Name-Realm of confirmed users, probed first when seen again | 2 weeks | Yes |
+| Remembered addon users | Whisper name and last oath status of confirmed users; probed first when seen again, crest shown meanwhile | 2 weeks | Yes |
 | No addon | Players who didn't answer | 2 h (your own) / 30 min (shared) | Yes |
 | Heard finds | Last find posted per player | 5 min | No |
 

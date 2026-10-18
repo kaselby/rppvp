@@ -279,6 +279,14 @@ end
 local function RuledOut(guid)
     return noAddon[guid] and time() < noAddon[guid] and not Simulated(guid)
 end
+-- A remembered addon user's last known oath. It shows their crest the moment
+-- they're seen, while a re-check goes out; a fresh answer replaces it, and it
+-- stops counting after CACHE_MISSES unanswered re-checks in a row.
+local CACHE_MISSES = 2
+local function Cached(guid)
+    local entry = likely[guid]
+    return entry and entry.sworn and (entry.misses or 0) < CACHE_MISSES and not RuledOut(guid) or false
+end
 local function Seen(guid)
     if seenAt[guid] == nil then seenAt[guid] = GetTime() end
 end
@@ -502,6 +510,14 @@ local function ShareFound(guid, name, peer)
     shares[guid] = {due = GetTime() + Between(SHARE_WAIT), payload = FoundPayload(guid, name, peer), peer = peer}
 end
 local function MarkNoAddon(guid, why)
+    -- A remembered user gets a second chance: one dropped whisper shouldn't
+    -- hide a crest. The next sighting asks again.
+    local entry = likely[guid]
+    if entry and (entry.misses or 0) + 1 < CACHE_MISSES then
+        entry.misses = (entry.misses or 0) + 1
+        Debug(Who(guid) .. " didn't answer a re-check; their saved status stands until one more goes unanswered.", true)
+        return
+    end
     noAddon[guid] = time() + NO_ADDON
     likely[guid] = nil
     if OtherRealm(guid) and #unsharedNo < NO_MAX then
@@ -625,7 +641,7 @@ local function OnWhisper(message, sender)
     TimeResult("answer", guid)
     -- Senders can arrive without a realm; prefer a full Name-Realm.
     local name = (probed and probed.name) or known or sender
-    if ValidName(name) then likely[guid] = {name = name, seen = time()} end
+    if ValidName(name) then likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil} end
     Unqueue(guid)
     ShareFound(guid, name, peer)
     ChatChanged(guid)
@@ -658,7 +674,7 @@ local function OnShare(message)
             peers[guid] = A.MergePledgePeer(current, peer, now, true)
         end
         names[guid], noAddon[guid] = name, nil
-        likely[guid] = {name = name, seen = time()}
+        likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil}
         Unqueue(guid)
         ChatChanged(guid)
         Refresh()
@@ -828,8 +844,13 @@ local function Status(unit)
         QueryUnit(unit, unit:find("^nameplate") and PRIORITY_PLATE or PRIORITY_UNIT)
     end
     local peer = peers[guid]
-    -- Simulated users stand in for "wears a badge", flagged or not.
-    if peer and peer.sworn and GetTime() - peer.seen < A.TTL and (peer.simulated or Flagged(unit)) then return peer end
+    if peer and GetTime() - peer.seen < A.TTL then
+        -- Simulated users stand in for "wears a badge", flagged or not.
+        if peer.sworn and (peer.simulated or Flagged(unit)) then return peer end
+        return
+    end
+    -- Nothing fresh: their saved status, while the re-check is out.
+    if Cached(guid) and Flagged(unit) then return {sworn = true, cached = true} end
 end
 -- Normal crest, or the debug overlay: light grey while being asked, dark grey
 -- once marked no-addon.
@@ -1647,7 +1668,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         A.chatAvailable = A.InstallChat(function() return db.chatIcons ~= false end, function(guid)
             if guid == myGUID then return Sworn() end
             local peer = peers[guid]
-            return peer and peer.sworn and GetTime() - peer.seen < A.TTL
+            if peer and GetTime() - peer.seen < A.TTL then return peer.sworn end
+            return Cached(guid)
         end, ChatFaction, function(guid)
             -- Grey crests in chat only while debugging or simulating.
             if debugEnabled or simPercent then return DebugState(guid) end

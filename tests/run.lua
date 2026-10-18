@@ -805,4 +805,44 @@ for _, line in ipairs(debugLines) do logged = logged or line:find("reply to Gone
 check(logged, "bounced reply reported in debug")
 SlashCmdList.HONORBOUND("debug off")
 
+-- 0.4.3: saved oath status. A remembered sworn player shows a crest as soon
+-- as they're seen, while a re-check goes out.
+advance(400)
+sent = {}
+local cg = "Player-96-C0C001"
+local sv = "Player-96-C0C000"
+players[sv] = { name = "Saved Status", realm = "ClassicBetaPvE" }
+addon("WQ|1|" .. sv .. "|1|20|0.4.3", "Saved Status-ClassicBetaPvE")
+check(HonorBoundDB.likely[sv] and HonorBoundDB.likely[sv].sworn == true, "an answer saves the oath status with the name")
+HonorBoundDB.likely[cg] = { name = "Cache-Dname", seen = time(), sworn = true }
+units.nameplate1 = { guid = cg, flagged = true, faction = units.player.faction, name = "Cache", realm = "Dname" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(plate.UnitFrame.HonorBoundCrest.shown, "saved status shows the crest at once")
+local function cachedChat() local a = {} a[12] = cg return ChatFrameUtil.filter("CHAT_MSG_SAY", "Cache", unpack(a, 1, 12)) end
+check((cachedChat() or ""):find("Crest", 1, true), "and in chat")
+check(probeSent("Cache-Dname"), "and a re-check goes out")
+units.nameplate1.flagged = false
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(not plate.UnitFrame.HonorBoundCrest.shown, "saved status never overrides the live flag")
+units.nameplate1.flagged = true
+-- One unanswered re-check: the crest stays. Two: it goes.
+advance(31)
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(plate.UnitFrame.HonorBoundCrest.shown and not HonorBoundDB.noAddon[cg], "one missed re-check keeps the crest")
+sent = {}
+check(probeSent("Cache-Dname"), "a second re-check goes out")
+advance(31)
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(not plate.UnitFrame.HonorBoundCrest.shown and HonorBoundDB.noAddon[cg], "two missed re-checks drop it")
+-- An answer saying "not sworn" replaces the saved status.
+local cn = "Player-96-C0C002"
+HonorBoundDB.likely[cn] = { name = "Gave-Up", seen = time(), sworn = true }
+units.nameplate1 = { guid = cn, flagged = true, faction = units.player.faction, name = "Gave", realm = "Up" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(plate.UnitFrame.HonorBoundCrest.shown, "saved sworn status shown")
+addon("WR|1|" .. cn .. "|0|0|0.4.3", "Gave Up-ClassicBetaPvE")
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+check(not plate.UnitFrame.HonorBoundCrest.shown and not HonorBoundDB.likely[cn].sworn, "a 'not sworn' answer removes the crest and the saved status")
+units.nameplate1 = nil
+
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")
