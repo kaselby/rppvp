@@ -1822,13 +1822,17 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         elseif GameTooltip:HasScript("OnTooltipSetUnit") then
             GameTooltip:HookScript("OnTooltipSetUnit", OnTooltip)
         end
-        A.optionsCategory = A.InstallOptions(db, function(key)
+        -- The settings page is a convenience: if the game's Settings API ever
+        -- differs from what we expect, lose the page, not the addon.
+        local built, category = pcall(A.InstallOptions, db, function(key)
             if key == "autoflag" then
                 if db.autoReflag == false then DisarmReflag() end
                 UpdatePrompt()
             end
             Refresh()
         end)
+        A.optionsCategory = built and category or nil
+        if not built then Print("Couldn't build the settings page (" .. tostring(category) .. "). The /honor commands still work.") end
         C_Timer.After(15, JoinChannel)
         C_Timer.NewTicker(1, Tick)
         UpdatePrompt()
