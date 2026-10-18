@@ -138,6 +138,7 @@ tooltipLines = {}
 moving = true
 function IsPlayerMoving() return moving end
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
+assert(loadfile("HonorBound/Options.lua"))("HonorBound", A)
 local events = frames[1]
 local prompt = HonorBoundPrompt
 local function event(name, ...) events.scripts.OnEvent(events, name, ...) end
@@ -935,7 +936,7 @@ units.target = nil
 -- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
 -- in its own process by tests/scenario.lua.
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside"}
+local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")

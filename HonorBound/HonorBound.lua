@@ -23,7 +23,6 @@ local announceRetryAt = 0
 local peers, queries, widgets, plates = {}, {}, {}, {}
 local lastQuery, lastAnswer, lastJoin, lastMinute = -100, -100, -100, 0
 local guarded, deadline, prompt, promptAfterCombat
-local REFLAG_POPUP_DELAY = 30    -- seconds the borrowed keys get before the popup shows too
 local Refresh, Announce, UpdatePrompt, RefreshPlate
 
 local function Print(text)
@@ -1325,7 +1324,7 @@ UpdatePrompt = function()
                 reflagNotified = true
                 Print("You're unflagged. Your next action bar key or click will flag you again.")
             end
-            if not idle.manual and GetTime() - reflagArmedAt < REFLAG_POPUP_DELAY then
+            if not idle.manual and GetTime() - reflagArmedAt < db.popupDelay then
                 SetPromptShown(false)
                 return
             end
@@ -1375,7 +1374,7 @@ local function TooltipLines(tooltip, unit)
     end
 end
 local function BadgeTooltip(widget)
-    if not Status(widget.unit) then return end
+    if not widget.unit or not Status(widget.unit) then return end
     GameTooltip:SetOwner(widget, "ANCHOR_RIGHT")
     TooltipLines(GameTooltip, widget.unit)
     GameTooltip:Show()
@@ -1401,6 +1400,7 @@ local function NewWidget(host, unit)
 end
 local function Portrait(host, unit)
     if host.portrait then return host.portrait end
+    if host.Portrait then return host.Portrait end
     if unit == "player" then
         return _G.PlayerPortrait or (host.PlayerFrameContainer and host.PlayerFrameContainer.PlayerPortrait)
     end
@@ -1416,6 +1416,7 @@ local function PvpIcon(host, unit)
     end
     if ok and elements and elements.pvpIcon then return elements.pvpIcon end
     if host.pvpIcon then return host.pvpIcon end
+    if host.PartyMemberOverlay and host.PartyMemberOverlay.PVPIcon then return host.PartyMemberOverlay.PVPIcon end
     if unit == "player" then return _G.PlayerPVPIcon end
     return _G[(host:GetName() or "") .. "TextureFramePVPIcon"]
 end
@@ -1439,7 +1440,8 @@ local function Attach(widget)
     else
         widget:SetPoint("TOPLEFT", widget.host, "TOPLEFT", db.offsetX + 12, db.offsetY + 12)
     end
-    widget:SetScale(db.scale)
+    -- Party portraits are smaller than the player and target ones.
+    widget:SetScale(db.scale * (widget.party and 0.75 or 1))
 end
 local function DiscoverFrames()
     for _, entry in ipairs({ {"PlayerFrame", "player"}, {"TargetFrame", "target"}, {"FocusFrame", "focus"} }) do
@@ -1448,6 +1450,23 @@ local function DiscoverFrames()
             host.HonorBoundWidget = NewWidget(host, entry[2])
         end
     end
+    -- Blizzard's party frames (not the raid-style ones), made when the
+    -- party first shows. Each follows whichever unit its frame shows now.
+    local party = _G.PartyFrame
+    for i = 1, 4 do
+        local host = party and party["MemberFrame" .. i]
+        if host and not host.HonorBoundWidget then
+            host.HonorBoundWidget = NewWidget(host, "party" .. i)
+            host.HonorBoundWidget.party = true
+        end
+    end
+end
+-- The unit a widget's frame shows right now, or nil if it isn't in use.
+local function WidgetUnit(widget)
+    if not widget.party then return widget.unit end
+    local host = widget.host
+    local unit = host.GetUnit and host:GetUnit() or host.unit
+    if type(unit) == "string" and not Secret(unit) and host:IsShown() then return unit end
 end
 -- Nameplates: a small crest to the left of the name. Plates are recycled,
 -- so the crest lives on the plate and is re-checked for each new unit.
@@ -1488,8 +1507,9 @@ Refresh = function()
     if not db then return end
     DiscoverFrames()
     for _, widget in ipairs(widgets) do
+        widget.unit = WidgetUnit(widget)
         Attach(widget)
-        local wearing = Status(widget.unit) ~= nil
+        local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
         local state = not wearing and OverlayState(widget.unit)
         if wearing or state then
             widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
@@ -1718,13 +1738,27 @@ SlashCmdList.HONORBOUND = function(input)
         if not x or not y or math.abs(x) > 200 or math.abs(y) > 200 then Print("Use /honor offset X Y (−200 to 200)") return end
         db.offsetX, db.offsetY = x, y
         Print(("Crest moved to %d, %d from the PvP icon."):format(x, y))
+    elseif command == "options" or command == "settings" or command == "config" then
+        if A.optionsCategory and Settings.OpenToCategory then
+            Settings.OpenToCategory(A.optionsCategory:GetID())
+        else
+            Print("There's no settings page on this client; the commands in /honor help still work.")
+        end
+    elseif command == "delay" then
+        local value = tonumber(arg)
+        if not value or value < A.POPUP_MIN or value > A.POPUP_MAX then
+            Print(("Use /honor delay %d-%d (seconds before the popup after a dungeon)."):format(A.POPUP_MIN, A.POPUP_MAX))
+            return
+        end
+        db.popupDelay = math.floor(value + 0.5)
+        Print("After a dungeon, the popup waits " .. A.Seconds(db.popupDelay) .. ".")
     elseif command == "reset" then
         db.scale, db.offsetX, db.offsetY, db.plates = 1, 0, 0, true
         Print("Crest size and position reset, and nameplate crests turned on.")
     elseif command == "" or command == "status" then
         PrintStatus()
     else
-        Print("Commands: /honor (status), /honor swear, /honor renounce, /honor autoflag on|off, /honor plates, /honor chat on|off, /honor scale 0.6-2, /honor offset X Y, /honor reset.")
+        Print("Commands: /honor (status), /honor options, /honor swear, /honor renounce, /honor autoflag on|off, /honor plates, /honor chat on|off, /honor scale 0.6-2, /honor delay 10-120, /honor offset X Y, /honor reset.")
     end
     Refresh()
 end
@@ -1754,6 +1788,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         db.offsetY = math.min(200, math.max(-200, tonumber(db.offsetY) or 0))
         db.ring = nil
         if db.plates == nil then db.plates = true end
+        db.popupDelay = math.min(A.POPUP_MAX, math.max(A.POPUP_MIN, math.floor(tonumber(db.popupDelay) or A.POPUP_DEFAULT)))
         HonorBoundCharDB = type(HonorBoundCharDB) == "table" and HonorBoundCharDB or {}
         char = HonorBoundCharDB
         -- Existing oaths start their history now; never invent an earlier level.
@@ -1781,6 +1816,13 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         elseif GameTooltip:HasScript("OnTooltipSetUnit") then
             GameTooltip:HookScript("OnTooltipSetUnit", OnTooltip)
         end
+        A.optionsCategory = A.InstallOptions(db, function(key)
+            if key == "autoflag" then
+                if db.autoReflag == false then DisarmReflag() end
+                UpdatePrompt()
+            end
+            Refresh()
+        end)
         C_Timer.After(15, JoinChannel)
         C_Timer.NewTicker(1, Tick)
         UpdatePrompt()

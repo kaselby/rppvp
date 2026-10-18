@@ -138,6 +138,7 @@ tooltipLines = {}
 moving = true
 function IsPlayerMoving() return moving end
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
+assert(loadfile("HonorBound/Options.lua"))("HonorBound", A)
 local events = frames[1]
 local prompt = HonorBoundPrompt
 local function event(name, ...) events.scripts.OnEvent(events, name, ...) end

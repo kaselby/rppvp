@@ -19,6 +19,7 @@ assert(loadfile("HonorBound/Chat.lua"))("HonorBound", A)
 frames,tasks,tickers={},{},{}
 PlayerFrame.HonorBoundWidget,TargetFrame.HonorBoundWidget,FocusFrame.HonorBoundWidget=nil,nil,nil
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
+assert(loadfile("HonorBound/Options.lua"))("HonorBound", A)
 events,prompt=frames[1],HonorBoundPrompt
 event("PLAYER_LOGIN")
 print("Crest immediately after reload", targetBadge().shown)
