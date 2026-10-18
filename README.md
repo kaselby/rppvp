@@ -41,7 +41,7 @@ or you'll get two sets of flag prompts.
   bar key or click on an action bar button flags you and still uses the
   ability. Movement keys are never touched. If you don't use one within 30
   seconds, a popup with a flag button appears too. If you turned the flag
-  off yourself (portrait menu or `/pvp`), the popup appears straight away. `/honor autoflag off`
+  off yourself with `/pvp`, the popup appears straight away. `/honor autoflag off`
   turns this off and goes straight to the popup.
   When it runs out, the oath breaks and your crest disappears. `/honor swear`
   takes it again.

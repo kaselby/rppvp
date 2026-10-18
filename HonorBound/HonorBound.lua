@@ -935,7 +935,7 @@ function idle.Poll()
     end
 end
 function idle.Away() return GetTime() - idle.last >= idle.after end
--- You turned the flag off yourself (portrait menu or /pvp) rather than the
+-- You turned the flag off yourself (/pvp; the portrait menu is greyed out) rather than the
 -- game doing it on a zone change: ask straight away, don't wait for a key.
 idle.manual, idle.wasDesired = false, nil
 local function InPausedInstance()
