@@ -1578,11 +1578,17 @@ local function OnMessage(prefix, message, route, sender)
         noAddon[guid], asking[guid] = nil, nil
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
-        -- A remembered player's saved status follows what they say directly,
-        -- so a renounced oath can't come back from it after a reload.
+        -- Remember sworn players we hear from directly (group, guild, realm
+        -- channel) too, so their crest is back the moment we see them after a
+        -- relog. A remembered player's saved status follows what they say, so
+        -- a renounced oath can't come back from it either.
         local saved = likely[guid]
+        if not saved and peer.sworn then
+            local name = GuidName(guid) or (type(sender) == "string" and not Secret(sender) and Address(sender))
+            if ValidName(name) then saved = {name = name} likely[guid] = saved end
+        end
         if saved then
-            saved.sworn, saved.seen = peer.sworn or nil, time()
+            saved.sworn, saved.seen, saved.misses = peer.sworn or nil, time(), nil
             if isPledge then saved.level = peer.pledgedSinceLevel end
         end
         ChatChanged(guid)
