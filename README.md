@@ -66,5 +66,5 @@ starts over.
   Hardcore addon's verification, are on the way and will be in place before
   launch, so a broken oath can't just be quietly hidden.
 - Crests work across realms, but not across factions.
-- Made by Moderately Aware, Krylea, Jmcq and Raff. Found a bug? [Open an issue](https://github.com/kaselby/rppvp/issues).
+- Made by Moderately Aware, Krylea, Jmcq and Raffoo. Found a bug? [Open an issue](https://github.com/kaselby/rppvp/issues).
 - Developers: see [docs/TECHNICAL.md](docs/TECHNICAL.md) for how discovery works, the message protocol and running the tests.
