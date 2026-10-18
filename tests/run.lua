@@ -932,4 +932,13 @@ local shown = tooltipFor(tx, "Tall", "Tale")
 check(shown:find("Sworn to RP-PvP", 1, true) and not shown:find("level 40", 1, true), "a level above their current one (20) isn't shown")
 units.target = nil
 
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays.")
+-- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
+-- in its own process by tests/scenario.lua.
+local lua = arg and arg[-1] or "luajit"
+local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside"}
+for _, name in ipairs(scenarios) do
+    local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
+    check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
+end
+
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

@@ -1,5 +1,5 @@
 local _, Addon = ...
-Addon.VERSION = "0.4.5"
+Addon.VERSION = "0.4.6"
 Addon.PREFIX = "HONORBOUND1"
 Addon.CHANNEL = "HonorBound"
 Addon.TTL = 300     -- seconds before a silent peer is forgotten
@@ -16,4 +16,16 @@ function Addon.Decode(message)
     local guid, sworn, version = message:match("^S|2|([^|]+)|([01])|([%w%.%-]+)$")
     if not Addon.ValidGUID(guid) then return end
     return guid, { sworn = sworn == "1", version = version }
+end
+-- "I|1|<GUID>|<1 inside a dungeon, raid or scenario, 0 not>|<version>"
+-- Sent to the group only. A party member inside a dungeon can't be flagged,
+-- so this tells the ones outside to keep their crest. Older clients ignore it.
+function Addon.EncodeInside(guid, inside)
+    return ("I|1|%s|%d|%s"):format(guid, inside and 1 or 0, Addon.VERSION)
+end
+function Addon.DecodeInside(message)
+    if type(message) ~= "string" or #message > 255 then return end
+    local guid, inside, version = message:match("^I|1|([^|]+)|([01])|([%w%.%-]+)$")
+    if not Addon.ValidGUID(guid) then return end
+    return guid, inside == "1", version
 end

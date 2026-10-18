@@ -120,9 +120,16 @@ local function InPausedInstance()
     return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
 end
 -- Dungeons and raids unflag you and you can't reflag inside, so there a
--- sworn player keeps the crest. Anyone we can see in one is in it with us.
-local function FlaggedOrInside(unit)
-    return Flagged(unit) or InPausedInstance()
+-- sworn player keeps the crest. Anyone we can see in one is in it with us;
+-- a group member who's in one without us says so ("I" messages), and that
+-- word holds for groupInside.fresh seconds unless they say they've left.
+-- groupInside.at[guid]: when they last said so. groupInside.told: whether
+-- our own last announcement said we were inside.
+local groupInside = {fresh = 150, at = {}, told = false}
+local function FlaggedOrInside(unit, guid)
+    if Flagged(unit) or InPausedInstance() then return true end
+    local at = guid and groupInside.at[guid]
+    return at ~= nil and GetTime() - at < groupInside.fresh
 end
 local function Sworn()
     return char and char.sworn and (Desired() or InPausedInstance())
@@ -185,8 +192,9 @@ Announce = function(force)
     local now = GetTime()
     local payload = A.Encode(myGUID, Sworn())
     local pledgePayload = PledgePayload()
+    local inside = InPausedInstance()
     -- Include metadata changes in the existing announcement throttle.
-    local unchanged = payload == lastPayload and pledgePayload == lastPledgePayload
+    local unchanged = payload == lastPayload and pledgePayload == lastPledgePayload and inside == groupInside.told
     -- Keep repeated world/group events from flooding the channel,
     -- but let a changed oath through straight away.
     if unchanged and lastAnnounce and now - lastAnnounce < 3 then return end
@@ -195,18 +203,21 @@ Announce = function(force)
     -- hammering a busy channel every second.
     if now < announceRetryAt then return end
     local reached = {}
-    local function To(route, target)
-        if Send(payload, route, target) and Send(pledgePayload, route, target) then
+    local function To(route, target, extra)
+        if Send(payload, route, target) and Send(pledgePayload, route, target)
+            and (not extra or Send(extra, route, target)) then
             reached[#reached + 1] = ROUTES[route]
         end
     end
     local channel = ChannelID()
     if channel then To("CHANNEL", tostring(channel)) end
-    if GroupRoute() then To(GroupRoute()) end
+    -- The group hears whether we're inside: while we are, and once more
+    -- when we come out.
+    if GroupRoute() then To(GroupRoute(), nil, (inside or groupInside.told) and A.EncodeInside(myGUID, inside)) end
     if IsInGuild() then To("GUILD") end
     local mine = StatusWords(Sworn(), Sworn() and A.PledgeLevel(char))
     if #reached > 0 then
-        lastAnnounce, lastPayload, lastPledgePayload = now, payload, pledgePayload
+        lastAnnounce, lastPayload, lastPledgePayload, groupInside.told = now, payload, pledgePayload, inside
         Debug(SENT .. " your status (" .. mine .. ") to " .. table.concat(reached, ", ") .. ".")
     elseif channel or GroupRoute() or IsInGuild() then
         -- Sends were refused: back off. With nowhere to send yet, nothing is
@@ -374,6 +385,10 @@ Describe = function(message)
         return "a probe (do you have the addon? here's my status)"
     elseif kind == "WR" then
         return "a reply (yes, I have the addon, here's my status)"
+    elseif kind == "I" then
+        local guid, inside = message:match("^I|1|([^|]+)|([01])|")
+        return (guid == myGUID and "that you're" or (Who(guid) .. " is")) .. (inside == "1" and " inside" or " out of")
+            .. " a dungeon or raid"
     elseif kind == "F" then
         local _, name = message:match("^F|1|([^|]+)|([^|]+)|")
         return "a find: " .. tostring(name) .. " has the addon"
@@ -515,9 +530,14 @@ end
 local function ShareFound(guid, name, peer)
     if not OtherRealm(guid) or not ValidName(name) then return end
     local record = heard[guid]
-    if SameStatus(record, peer) and GetTime() - record.at < SHARE_REFRESH then return end
-    if shares[guid] then return end
-    shares[guid] = {due = GetTime() + Between(SHARE_WAIT), payload = FoundPayload(guid, name, peer), peer = peer}
+    if SameStatus(record, peer) and GetTime() - record.at < SHARE_REFRESH then
+        -- The realm already has this news; anything we queued is older.
+        shares[guid] = nil
+        return
+    end
+    -- Already queued: keep its place in line, but share the newest status.
+    local due = shares[guid] and shares[guid].due or GetTime() + Between(SHARE_WAIT)
+    shares[guid] = {due = due, payload = FoundPayload(guid, name, peer), peer = peer}
 end
 local function MarkNoAddon(guid, why)
     -- A remembered user gets a second chance: one dropped whisper shouldn't
@@ -849,7 +869,7 @@ local function Status(unit)
     local guid = GUID(unit)
     if not guid then return end
     if guid == myGUID then
-        if char and char.sworn and FlaggedOrInside("player") then return { version = A.VERSION } end
+        if char and char.sworn and FlaggedOrInside("player", guid) then return { version = A.VERSION } end
         return
     end
     if UnitIsPlayer(unit) then
@@ -858,11 +878,11 @@ local function Status(unit)
     local peer = peers[guid]
     if peer and GetTime() - peer.seen < A.TTL then
         -- Simulated users stand in for "wears a badge", flagged or not.
-        if peer.sworn and (peer.simulated or FlaggedOrInside(unit)) then return peer end
+        if peer.sworn and (peer.simulated or FlaggedOrInside(unit, guid)) then return peer end
         return
     end
     -- Nothing fresh: their saved status, while the re-check is out.
-    if Cached(guid) and FlaggedOrInside(unit) then
+    if Cached(guid) and FlaggedOrInside(unit, guid) then
         return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
     end
 end
@@ -1102,10 +1122,15 @@ local function DisarmReflag()
     reflagArmed = false
     Debug("Reflag keys released.")
 end
+-- A fresh grace period: no deadline yet, nothing carried over, and no
+-- pause left from an earlier one.
+function idle.ResetGrace()
+    deadline, char.graceLeft, idle.frozen = nil, nil, nil
+end
 local function Swear()
     A.StartPledge(char, UnitLevel("player"))
-    char.sworn, char.joining, char.declined, char.graceLeft = true, nil, nil, nil
-    deadline = nil
+    char.sworn, char.joining, char.declined = true, nil, nil
+    idle.ResetGrace()
     Guard()
     Print("You've sworn the oath. Your crest shows to the community while you stay flagged.")
     Announce(true)
@@ -1114,8 +1139,11 @@ end
 local function Break(reason)
     if not char.sworn then return end
     char.pledgedSinceLevel = nil
-    char.sworn, char.joining, char.graceLeft = false, nil, nil
-    deadline = nil
+    char.sworn, char.joining = false, nil
+    idle.ResetGrace()
+    -- Unsworn, nothing needs reflagging: the keys go back now (or, in
+    -- combat, from UpdatePrompt once it ends).
+    DisarmReflag()
     Print("Oath broken: " .. reason .. ". Your crest is gone. Type /honor swear to take it again.")
     Announce(true)
     Refresh()
@@ -1238,7 +1266,7 @@ UpdatePrompt = function()
     idle.wasDesired = desired
     if desired then
         idle.manual = false
-        deadline, char.graceLeft = nil, nil
+        idle.ResetGrace()
         reflagArmedAt, reflagNotified = nil, nil
         DisarmReflag()
         if char.sworn then
@@ -1262,35 +1290,34 @@ UpdatePrompt = function()
 
     local welcome = char.sworn == nil and not char.declined
     if not char.sworn and not welcome and not char.joining then
+        DisarmReflag()
         SetPromptShown(false)
         return
     end
     if char.sworn and InPausedInstance() then
         -- You can't reflag inside; the countdown starts fresh outside. A flag
         -- that dropped during the loading screen wasn't you.
-        deadline, char.graceLeft, reflagArmedAt, idle.manual = nil, nil, nil, false
+        idle.ResetGrace()
+        reflagArmedAt, idle.manual = nil, false
         DisarmReflag()
         SetPromptShown(false)
         return
     end
     local left
     if char.sworn then
-        if IsPVPTimerRunning() then
-            left = (GetPVPTimer() or 0) / 1000
-            deadline = GetTime() + left
+        -- Our own countdown, even while the game's PvP timer runs after a
+        -- typed /pvp: only ours pauses while you're away.
+        -- Logged in unflagged: grace left from an earlier session carries over.
+        deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
+        idle.Poll()
+        if idle.Away() then
+            -- Away: hold the countdown where it was.
+            idle.frozen = idle.frozen or math.max(0, deadline - GetTime())
+            deadline = GetTime() + idle.frozen
         else
-            -- Logged in unflagged: grace left from an earlier session carries over.
-            deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
-            idle.Poll()
-            if idle.Away() then
-                -- Away: hold the countdown where it was.
-                idle.frozen = idle.frozen or math.max(0, deadline - GetTime())
-                deadline = GetTime() + idle.frozen
-            else
-                idle.frozen = nil
-            end
-            left = deadline - GetTime()
+            idle.frozen = nil
         end
+        left = deadline - GetTime()
         if left <= 0 then Break("you stayed unflagged too long") DisarmReflag() SetPromptShown(false) return end
         -- Try the borrowed keys first; the popup follows if they go unused.
         if ArmReflag() then
@@ -1508,6 +1535,17 @@ local function OnMessage(prefix, message, route, sender)
         end
         return
     end
+    local insider, inside = A.DecodeInside(message)
+    if insider then
+        -- Only a group member's word counts: they're the ones we can't see.
+        if insider ~= myGUID and (route == "PARTY" or route == "RAID" or route == "INSTANCE_CHAT") then
+            Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", true)
+            groupInside.at[insider] = inside and GetTime() or nil
+            ChatChanged(insider)
+            Refresh()
+        end
+        return
+    end
     local guid, peer = A.DecodePledge(message)
     local isPledge = guid ~= nil
     if not guid then guid, peer = A.Decode(message) end
@@ -1520,6 +1558,13 @@ local function OnMessage(prefix, message, route, sender)
         noAddon[guid], asking[guid] = nil, nil
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
+        -- A remembered player's saved status follows what they say directly,
+        -- so a renounced oath can't come back from it after a reload.
+        local saved = likely[guid]
+        if saved then
+            saved.sworn, saved.seen = peer.sworn or nil, time()
+            if isPledge then saved.level = peer.pledgedSinceLevel end
+        end
         ChatChanged(guid)
         Refresh()
     end
@@ -1537,6 +1582,9 @@ local function Tick()
     end
     for guid, at in pairs(queries) do
         if now - at > A.TTL then queries[guid] = nil end
+    end
+    for guid, at in pairs(groupInside.at) do
+        if now - at >= groupInside.fresh then groupInside.at[guid] = nil end
     end
     PumpProbes()
     if now - lastMinute >= (simPercent and 15 or 60) then
