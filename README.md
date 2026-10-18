@@ -3,8 +3,8 @@
 WoW Forever has no RP-PvP realms, so this addon makes the commitment a
 community badge instead. Each character swears an oath to stay flagged for
 PvP. Sworn players wear a faction crest on their player, target and focus
-frames and beside their name on nameplates, and other members can see it. There are no levels, ranks, timers
-or streaks: you're either sworn and flagged, or you aren't.
+frames and beside their name on nameplates, and other members can see it. There are
+no ranks or scores: you're either sworn and flagged, or you aren't.
 
 ## Install and share
 
