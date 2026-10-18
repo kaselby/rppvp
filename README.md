@@ -18,11 +18,13 @@ game.
   breaks and your crest is gone. The clock waits while you're inside a
   dungeon or away from the keyboard.
 - **Shows the crest.** Sworn players wear a blue (Alliance) or red (Horde)
-  crest in place of the usual PvP icon, on nameplates, and in chat. Hover it
+  crest in place of the usual PvP icon (on portraits and party frames), on
+  nameplates, and in chat. Hover it
   to see the level they swore at.
 - **Can't be faked.** On portraits and nameplates, a crest only shows while
   the game says that player really is flagged. Inside dungeons and raids,
-  where nobody can be flagged, sworn players keep their crest.
+  where nobody can be flagged, sworn players keep their crest, and party
+  members waiting outside still see it.
 
 You only see crests on other players who also use HonorBound, so share it
 with your guild and friends.
@@ -49,11 +51,16 @@ time with `/honor swear`.
 If your oath breaks, `/honor swear` takes it again, and your "since level"
 starts over.
 
-## Commands
+## Settings and commands
+
+Settings are under Options > AddOns > HonorBound: reflagging with your
+action bar keys, crests on nameplates and in chat, crest size, and how long
+the popup waits after a dungeon.
 
 | Type | To |
 |---|---|
 | `/honor` | See your oath and flag status |
+| `/honor options` | Open the settings |
 | `/honor swear` | Swear the oath on this character |
 | `/honor renounce confirm` | Give up the oath |
 | `/honor plates` | Turn crests on nameplates on or off |
