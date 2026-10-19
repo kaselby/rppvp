@@ -164,10 +164,9 @@ local function ReportRefused(now)
         .. (refused.reported > 0 and (" in the last " .. REFUSED_EVERY .. " s") or "") .. ": " .. table.concat(why, "; ") .. ".")
     refused.count, refused.reasons, refused.reported = 0, {}, now
 end
--- During boss encounters the game blocks addon messages, and while zoning
--- (the loading screen and a few seconds after arriving) it rejects them.
--- Don't even try then: nothing is sent, counted as refused or retried; it
--- resumes afterwards. A.zonePauseUntil is set by the zoning events.
+-- The game blocks addon messages in boss encounters and rejects them while
+-- zoning (the loading screen and a few seconds after). Nothing is sent then,
+-- and nothing counts as refused. A.zonePauseUntil is set by the zoning events.
 A.ZONE_SETTLE = 3
 local function SendingBlocked()
     if (A.zonePauseUntil or 0) > GetTime() then return true end
@@ -930,11 +929,10 @@ function A.PlayedNow()
     if not A.playedAt then return end
     return A.playedAt + (GetTime() - A.playedClock)
 end
--- Ask the server for /played without printing it in chat (our request only;
--- typing /played still prints as normal).
+-- Ask for /played without printing it; a typed /played still prints.
 function A.RequestPlayed()
     if not RequestTimePlayed then return end
-    -- Hidden until our answer arrives (then for one more second), at most 30 s.
+    -- Hidden until a second after our answer, at most 30 s.
     A.hidePlayedUntil = GetTime() + 30
     for _, owner in ipairs({_G, ChatFrameUtil or {}}) do
         local name = owner == _G and "ChatFrame_DisplayTimePlayed" or "DisplayTimePlayed"
@@ -950,8 +948,7 @@ function A.RequestPlayed()
     A.playedAskedAt = GetTime()
     RequestTimePlayed()
 end
--- No answer to our /played request: ask again (3 tries, 30 s apart), then
--- say this session couldn't be checked; the next login checks it.
+-- No answer: 3 tries, 30 s apart, then this session waits for the next login.
 function A.CheckPlayedAnswer(now)
     if A.playedAt or not A.playedAskedAt or now - A.playedAskedAt < 30 then return end
     A.playedTries = (A.playedTries or 1) + 1
@@ -999,12 +996,10 @@ function A.TrackPlayed()
     if now and char.sworn and char.verify then char.verify.seen = math.max(char.verify.seen, now) end
 end
 
--- The save macro (Save.lua). Every change (swear, break, a counted gap) and
--- every SAVE_EVERY seconds while sworn bumps this computer's write counter
--- and writes the macro, after combat if need be. At login the higher counter
--- wins: the macro's (another computer played since) or this computer's (a
--- change here never reached the macro).
-A.SAVE_EVERY = 120 -- at most 2 min lost to a crash, which the 2 min gap rule ignores
+-- The save macro (Save.lua). Each change, and every SAVE_EVERY s while sworn,
+-- bumps the write counter and rewrites the macro (after combat if need be).
+-- At login the higher counter, the macro's or this computer's, wins.
+A.SAVE_EVERY = 120 -- a crash loses at most this, within VERIFY_IGNORE
 function A.MarkSave()
     char.saveSeq = (char.saveSeq or 0) + 1
     A.saveDirty, A.savedAt = true, GetTime()
@@ -1037,8 +1032,8 @@ function A.FlushSave()
         end
     end
 end
--- No free character macro slot: a dialog like the pledge prompt asks for
--- one to be cleared. Shown once a session unless Retry finds them still full.
+-- No free character macro slot: ask for one to be cleared. Shown on every
+-- failed save while sworn, so it returns with each SAVE_EVERY save.
 function A.ShowMacrosFull()
     local f = A.macrosFull
     if not f then
@@ -1109,8 +1104,8 @@ function A.ShowMacrosFull()
     f.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
     f:Show()
 end
--- At login, once macros are loaded: settle the record, then ask for /played
--- (assessing before this could compare against an out-of-date copy).
+-- At login, once macros are loaded: settle the record, then ask for /played,
+-- so the gap is measured against the newest copy.
 function A.SyncSave()
     if not myGUID or A.saveSynced then return end
     A.saveSynced = true
@@ -1637,13 +1632,12 @@ local function OnMessage(prefix, message, route, sender)
             Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", isPledge)
         end
         noAddon[guid] = nil
-        -- It answers a whisper of ours still out to them, too: without this
-        -- that whisper times out and marks a known addon user as without it.
+        -- This answers our whisper still out to them, which would otherwise
+        -- time out and mark them as without the addon.
         if pending[guid] then pending[guid] = nil stats.answered = stats.answered + 1 end
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
-        -- Remember sworn players heard here too, so their crest is back at once
-        -- after a relog; the saved status follows what they say.
+        -- Remember sworn players heard here too, for their crest after a relog.
         local saved = likely[guid]
         if not saved and peer.sworn then
             local name = GuidName(guid) or (type(sender) == "string" and not Secret(sender) and Address(sender))
@@ -1997,8 +1991,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         if Secret(guid) or not A.ValidGUID(guid) then return end
         -- Whispers can't cross factions.
         if SameFaction(guid) == false then return end
-        -- Chat gives "First Surname" (a space, no realm), which bounces as a
-        -- whisper address; the whisper form is "First-Surname".
+        -- Chat gives "First Surname", which bounces; Address makes "First-Surname".
         Query(guid, PRIORITY_CHAT, Address(FullName(sender)))
     elseif event == "UPDATE_MOUSEOVER_UNIT" then
         QueryUnit("mouseover", PRIORITY_UNIT)

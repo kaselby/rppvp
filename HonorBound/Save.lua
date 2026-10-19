@@ -1,14 +1,11 @@
--- The pledge and its verification, saved in a character macro. Macros are
--- stored on Blizzard's servers, unlike addon data, so the record follows the
--- character to any computer, and the verification counts play on all of them.
+-- The pledge and its verification, saved in a character macro: macros live on
+-- the server, so the record follows the character to any computer.
 --
--- One line: l = pledged-since level (0 = not sworn: a break is saved too, so
--- another computer can't bring it back), s = /played at the pledge, p =
--- /played as last seen by HonorBound, u = untracked play, n = write counter
--- (the higher of the macro's and this computer's wins at login), h = a hash
--- of all of it bound to the character's GUID. Hand edits, or a macro copied
--- to another character, don't check out. The formula ships with the addon,
--- so it stops casual edits, not a determined cheater.
+-- l = pledged-since level (0 = not sworn, so a break is saved too), s, p, u =
+-- the verify record's since, seen and untracked, n = write counter, h = a hash
+-- of it all bound to the character's GUID. That stops hand edits and copies
+-- to another character, not a determined cheater: the formula ships with the
+-- addon.
 local _, A = ...
 
 A.SAVE_NAME = "HonorBound Save" -- macro names are at most 16 characters
@@ -53,12 +50,10 @@ function A.DecodeSave(guid, body)
     return record
 end
 
--- Only character macros count: an account-wide macro of the same name would
--- be shared with every character. Account macros fill indexes 1 to their
--- count and character macros come after every account slot, so anything past
--- the account count is a character macro. (MAX_ACCOUNT_MACROS isn't used: it
--- lives in the macro UI, which may not be loaded, and Forever's limits differ
--- from Classic's.)
+-- Only a character macro counts: an account one is shared by every character.
+-- Character indexes come after all the account slots, so past the account
+-- count is a character macro. (MAX_ACCOUNT_MACROS lives in the macro UI, which
+-- may not be loaded.)
 local function Index()
     if not (GetMacroIndexByName and GetNumMacros) then return end
     local index = GetMacroIndexByName(A.SAVE_NAME)
@@ -82,9 +77,8 @@ function A.WriteSave(guid, record)
         if current ~= body then EditMacro(index, A.SAVE_NAME, SAVE_ICON, body) end
         return true
     end
-    -- How many character macros fit isn't counted here (Forever has two rows
-    -- more than Classic, and MAX_CHARACTER_MACROS may say Classic's 18): ask
-    -- the game to make one, and call it full only if it didn't.
+    -- Forever has more character slots than MAX_CHARACTER_MACROS may say:
+    -- ask the game to make one, and call it full only if it didn't.
     local _, before = GetNumMacros()
     local ok, made = pcall(CreateMacro, A.SAVE_NAME, SAVE_ICON, body, true)
     if ok and type(made) == "number" and made > 0 then return true end
