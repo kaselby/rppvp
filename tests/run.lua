@@ -1039,4 +1039,22 @@ check(leaked == 0, "a failing nameplate shows the player nothing with debug off 
 C_NamePlate = quietPlates
 units.nameplate7 = nil
 event("NAME_PLATE_UNIT_REMOVED", "nameplate7")
+-- /honor help: player commands only, one per line; /honor devhelp: the rest.
+local function helpLines(command)
+    debugLines = {}
+    SlashCmdList.HONORBOUND(command)
+    return debugLines
+end
+local help = helpLines("help")
+local helpText = table.concat(help, "\n")
+check(#help == 13 and help[1]:find("Commands:", 1, true), "help lists 12 player commands, one per line (" .. #help .. " lines)")
+check(helpText:find("|cffffd100/honor save|r |cff808080-|r |cffc8c8c8Save your pledge", 1, true)
+    and helpText:find("|cffffd100/honor swear|r |cff808080-|r |cffc8c8c8Take the oath.|r", 1, true), "gold command, grey dash, light grey description")
+for _, devCommand in ipairs({"debug", "sim", "rate", "why", "chatcheck"}) do
+    check(not helpText:find("/honor " .. devCommand, 1, true), "help leaves out developer command " .. devCommand)
+end
+local devText = table.concat(helpLines("devhelp"), "\n")
+check(devText:find("Developer commands:", 1, true) and devText:find("/honor debug verbose", 1, true)
+    and devText:find("/honor chatcheck", 1, true) and not devText:find("/honor swear", 1, true), "devhelp lists the developer commands only")
+check(table.concat(helpLines("nonsense"), "\n") == helpText, "an unknown command shows the player help")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

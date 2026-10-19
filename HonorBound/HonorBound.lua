@@ -1924,7 +1924,37 @@ SlashCmdList.HONORBOUND = function(input)
     elseif command == "" or command == "status" then
         PrintStatus()
     else
-        Print("Commands: /honor (status), /honor options, /honor swear, /honor renounce, /honor autoflag on|off, /honor plates, /honor chat on|off, /honor scale 0.6-2, /honor delay 10-120, /honor offset X Y, /honor reset.")
+        -- One command per line. Developer commands are in /honor devhelp.
+        local dev = command == "devhelp"
+        local list = dev and {
+            {"debug on", "Developer messages in chat until you reload."},
+            {"debug verbose", "Also every whisper sent and received."},
+            {"debug off", "Turn developer messages off."},
+            {"sim 10", "Pretend 10% of players you ask have the addon (0-100)."},
+            {"sim off", "Stop simulating; remove simulated crests."},
+            {"rate 5", "Cap whispers at 5 a second (rate off: no cap)."},
+            {"why", "Explain your target's nameplate crest."},
+            {"chatcheck", "Check how this client stores chat lines."},
+        } or {
+            {"", "Your oath, flag and verification."},
+            {"swear", "Take the oath."},
+            {"renounce", "Give up the oath (asks to confirm)."},
+            {"options", "Open the settings page."},
+            {"save", "Save your pledge to its macro again."},
+            {"autoflag on|off", "Reflag on your next action bar key."},
+            {"plates", "Show or hide crests on nameplates."},
+            {"chat on|off", "Show or hide crests in chat."},
+            {"scale 0.6-2", "Crest size."},
+            {"offset X Y", "Move the crest."},
+            {"delay 10-120", "Seconds before the popup after a dungeon."},
+            {"reset", "Reset crest size and position."},
+        }
+        Print(dev and "Developer commands:" or "Commands:")
+        for _, entry in ipairs(list) do
+            -- Gold command, grey dash, light grey description.
+            DEFAULT_CHAT_FRAME:AddMessage("  |cffffd100/honor" .. (entry[1] ~= "" and (" " .. entry[1]) or "")
+                .. "|r |cff808080-|r |cffc8c8c8" .. entry[2] .. "|r")
+        end
     end
     Refresh()
 end
