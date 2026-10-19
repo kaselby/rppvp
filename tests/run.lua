@@ -1119,4 +1119,12 @@ check(tries > 0, "sending resumes after a minute even if the loading screen's en
 C_ChatInfo.SendAddonMessage = sendNow
 group = false
 SlashCmdList.HONORBOUND("debug off")
+-- Chat names on Forever are "First Surname": probe "First-Surname", the form
+-- that works (a space in the address bounces).
+sent = {}
+say("Blastor Totemborn", "Player-99-0C4A71")
+say("Rage Nightwing-ClassicBetaPvE", "Player-99-0C4A72")
+advance(1)
+check(#whispers("Blastor-Totemborn") == 1 and #whispers("Blastor Totemborn") == 0, "a chat speaker is probed as First-Surname")
+check(#whispers("Rage-Nightwing") == 1, "and with a realm attached too")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

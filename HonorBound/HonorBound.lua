@@ -2072,7 +2072,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif probeChat[event] then
         local sender, guid = select(2, ...), select(12, ...)
         if Secret(guid) or not A.ValidGUID(guid) then return end
-        Query(guid, PRIORITY_CHAT, FullName(sender))
+        -- Chat gives "First Surname" (a space, no realm), which bounces as a
+        -- whisper address; the whisper form is "First-Surname".
+        Query(guid, PRIORITY_CHAT, Address(FullName(sender)))
     elseif event == "UPDATE_MOUSEOVER_UNIT" then
         QueryUnit("mouseover", PRIORITY_UNIT)
     elseif event == "NAME_PLATE_UNIT_ADDED" then
