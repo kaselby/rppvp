@@ -1314,6 +1314,16 @@ local function PlateCrest(unit)
     end
     return crest
 end
+-- A nameplate that failed to refresh: say so (once a minute, debug or not,
+-- since it means a missing crest), with the game's error for a bug report.
+local plateErrorAt = -100
+local function PlateError(unit, err)
+    Debug("Couldn't update the nameplate crest on " .. tostring(unit) .. ": " .. tostring(err))
+    if GetTime() - plateErrorAt >= 60 then
+        plateErrorAt = GetTime()
+        Print("A nameplate crest couldn't be updated (" .. tostring(err) .. "). Other nameplates still are.")
+    end
+end
 -- /honor why: for the target (or mouseover), every condition behind their
 -- nameplate crest, to find out why one is missing. Read only.
 local PLATE_ADDONS = {"Plater", "TidyPlates_ThreatPlates", "TidyPlates", "BetterBlizzPlates", "Kui_Nameplates", "NeatPlates"}
@@ -1394,7 +1404,22 @@ Refresh = function()
         -- Blizzard shows and hides the icon itself; alpha is ours to set.
         if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
     end
-    for unit in pairs(plates) do RefreshPlate(unit) end
+    -- Take the nameplates from the game each pass rather than trusting that
+    -- every "added" event arrived (loading screens, reloads), and refresh
+    -- each one on its own so one failure can't skip the rest.
+    if C_NamePlate and C_NamePlate.GetNamePlates then
+        for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
+            local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+            if type(unit) == "string" and not Secret(unit) and not plates[unit] then
+                plates[unit] = true
+                Debug("Picked up a nameplate the game didn't announce (" .. unit .. ").", true)
+            end
+        end
+    end
+    for unit in pairs(plates) do
+        local ok, err = pcall(RefreshPlate, unit)
+        if not ok then PlateError(unit, err) end
+    end
 end
 
 ---------------------------------------------------------------------------

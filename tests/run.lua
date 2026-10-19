@@ -923,4 +923,32 @@ units.target = { guid = "Player-99-0EE002", flagged = true, faction = units.play
 report = why()
 check(report:find("Known addon user: no", 1, true), "why: an unknown player is reported as not known yet:\n" .. report)
 units.target = nil
+-- Nameplates the game never announced are still picked up, and one
+-- nameplate failing doesn't stop the others.
+SlashCmdList.HONORBOUND("sim 100")
+local plate2, plate3 = object(), object()
+plate2.UnitFrame, plate3.UnitFrame = object(), object()
+plate2.UnitFrame.name, plate3.UnitFrame.name = object(), object()
+plate2.namePlateUnitToken, plate3.namePlateUnitToken = "nameplate2", "nameplate3"
+local realPlates = C_NamePlate
+C_NamePlate = {
+    GetNamePlateForUnit = function(unit)
+        if unit == "nameplate3" then error("broken plate") end
+        return (unit == "nameplate1" and plate) or (unit == "nameplate2" and plate2) or nil
+    end,
+    GetNamePlates = function() return {plate2, plate3} end,
+}
+units.nameplate2 = { guid = "Player-99-0EE101", flagged = false, faction = units.player.faction, name = "Unannounced", realm = "Other Realm" }
+units.nameplate3 = { guid = "Player-99-0EE102", flagged = false, faction = units.player.faction, name = "Broken", realm = "Other Realm" }
+debugLines = {}
+advance(5) -- no NAME_PLATE_UNIT_ADDED for either
+check(plate2.UnitFrame.HonorBoundCrest and plate2.UnitFrame.HonorBoundCrest.shown, "an unannounced nameplate still gets its crest")
+local reported = 0
+for _, line in ipairs(debugLines) do if line:find("A nameplate crest couldn't be updated", 1, true) then reported = reported + 1 end end
+check(reported == 1, "a failing nameplate is reported once, not every second (" .. reported .. ")")
+C_NamePlate = realPlates
+units.nameplate2, units.nameplate3 = nil, nil
+event("NAME_PLATE_UNIT_REMOVED", "nameplate2")
+event("NAME_PLATE_UNIT_REMOVED", "nameplate3")
+SlashCmdList.HONORBOUND("sim off")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")
