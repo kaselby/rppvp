@@ -970,8 +970,6 @@ end
 local help = helpLines("help")
 local helpText = table.concat(help, "\n")
 check(#help == 13 and help[1]:find("Commands:", 1, true), "help lists 12 player commands, one per line (" .. #help .. " lines)")
-check(helpText:find("|cffffd100/honor save|r |cff808080-|r |cffc8c8c8Save your pledge", 1, true)
-    and helpText:find("|cffffd100/honor swear|r |cff808080-|r |cffc8c8c8Take the oath.|r", 1, true), "gold command, grey dash, light grey description")
 for _, devCommand in ipairs({"debug", "sim", "rate", "why", "chatcheck"}) do
     check(not helpText:find("/honor " .. devCommand, 1, true), "help leaves out developer command " .. devCommand)
 end

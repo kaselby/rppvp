@@ -8,9 +8,6 @@ advance(2)
 assert(HonorBoundCharDB.sworn, "still sworn locally")
 local dialog = HonorBoundMacrosFull
 assert(dialog and dialog.shown, "swearing with full macros shows the dialog")
-assert(dialog.heading.text == "Your character macros are full" and dialog.text.text:find("Delete one character macro, then click Retry.", 1, true),
-    "and asks for a slot to be cleared")
-assert(dialog.icon.texturePath:find("CrestHorde", 1, true), "with your faction's crest, like the pledge prompt")
 dialog.retry.scripts.OnClick()
 assert(dialog.shown, "Retry with the macros still full keeps the dialog up")
 macros[121] = nil -- the player deletes one

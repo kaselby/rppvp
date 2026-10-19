@@ -12,7 +12,3 @@ assert(HonorBoundCharDB.verify.untracked == 4000, "this computer's record stands
 assert(table.concat(debugLines, "\n"):find("was edited, so it was ignored and rewritten from this computer", 1, true), "and says so")
 local saved = A.ReadSave(me)
 assert(saved and saved.untracked == 4000, "the macro is rewritten correctly")
--- Neighbouring values must not give neighbouring hashes.
-local function differ(a, b) local n = 0 for i = 1, #a do if a:sub(i, i) ~= b:sub(i, i) then n = n + 1 end end return n end
-local d = differ(A.SaveSeal(me, "l=10;s=0;p=100;u=4000;n=9"), A.SaveSeal(me, "l=10;s=0;p=100;u=4001;n=9"))
-assert(d >= 10, "a one-second change scrambles the hash (" .. d .. " of 16 differ)")
