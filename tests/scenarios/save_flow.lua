@@ -1,4 +1,4 @@
--- Swearing saves; the record is rewritten every 5 minutes; breaking saves
+-- Swearing saves; the record is rewritten every 2 minutes; breaking saves
 -- "not sworn" (never deletes); combat waits.
 setup()
 event("TIME_PLAYED_MSG", 36000, 600)
@@ -10,8 +10,8 @@ assert(m.body:find("^#HonorBound save data%. Do not edit or delete this macro"),
 assert(#m.body <= 255, "within the macro size limit (" .. #m.body .. ")")
 for line in m.body:gmatch("[^\n]+") do assert(line:sub(1, 1) == "#", "every line is a comment: " .. line) end
 local firstSeen = A.ReadSave(me).seen
-advance(301)
-assert(A.ReadSave(me).seen >= firstSeen + 290, "the record is rewritten every 5 minutes")
+advance(121)
+assert(A.ReadSave(me).seen >= firstSeen + 110, "the record is rewritten every 2 minutes")
 combat = true
 SlashCmdList.HONORBOUND("renounce confirm")
 advance(3)

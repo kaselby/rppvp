@@ -85,7 +85,8 @@ it, unflagging, reflagging and re-enabling still leaves a gap.
   by the addon, kept current every second from the login /played plus
   session time), `untracked`.
 - After login, once the save macro is read, the addon asks for /played (its
-  own request isn't printed in chat). Gap = /played now − `seen`. Gaps of
+  own request isn't printed in chat). No answer: it asks again, 3 tries 30 s
+  apart, then says this session will be checked at the next login. Gap = /played now − `seen`. Gaps of
   2 min or less are ignored; others add to `untracked`. Only the first
   /played of a session is assessed.
 - Allowed: the larger of 2 h or 2% of the play since the pledge. Going over
@@ -108,16 +109,20 @@ are stored on Blizzard's servers and addon data isn't:
   change scrambles it). Hand edits and macros copied to another character are
   rejected; the formula ships with the addon, so this stops casual edits, not
   a determined cheater, and an old copy of the line stays valid.
-- Written on swear, break and a counted gap, every 5 min while sworn, and at
-  logout; never in combat (it waits). Each write bumps the counter.
+- Written on swear, break and a counted gap, every 2 min while sworn, and at
+  logout; never in combat (it waits). Each write bumps the counter. Addons
+  can only write SavedVariables at logout or /reload (why the Hardcore addon
+  loses whole sessions to crashes); the macro is written during play.
 - At login, once macros are loaded (`UPDATE_MACROS`, or 10 s after login):
   the higher counter wins. The macro's means another computer played since,
   so its record is adopted (its session isn't a gap); this computer's means a
   change here never reached the macro (e.g. a break in combat, then a
   reload), so it's written now. An edited macro is ignored and rewritten; a
-  missing one is recreated. No free character macro slot: a one-time note,
-  local data only.
-- A crash loses up to 5 minutes of `seen` to the gap; the allowance covers it.
+  missing one is recreated. No free character macro slot: a dialog like the
+  pledge prompt asks for one to be cleared (Open macros / Retry / Not now);
+  meanwhile the record is local only. `/honor save` tries again.
+- A crash or disconnect loses at most the 2 min since the last write, which
+  the 2 min gap rule ignores.
 
 ## Development and validation
 

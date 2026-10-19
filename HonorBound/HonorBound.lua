@@ -1002,7 +1002,23 @@ function A.RequestPlayed()
             A.playedHooked = true
         end
     end
+    A.playedAskedAt = GetTime()
     RequestTimePlayed()
+end
+-- No answer to our /played request: ask again (3 tries, 30 s apart), then
+-- say this session couldn't be checked; the next login checks it.
+function A.CheckPlayedAnswer(now)
+    if A.playedAt or not A.playedAskedAt or now - A.playedAskedAt < 30 then return end
+    A.playedTries = (A.playedTries or 1) + 1
+    if A.playedTries <= 3 then
+        Debug("No answer to the /played request yet; asking again.")
+        A.RequestPlayed()
+    else
+        A.playedAskedAt = nil
+        if char.sworn then
+            Print("Couldn't get your play time from the server, so this session's verification will be checked at your next login.")
+        end
+    end
 end
 function A.OnPlayed(total)
     if type(total) ~= "number" then return end
@@ -1045,7 +1061,7 @@ end
 -- and writes the macro, after combat if need be. At login the higher counter
 -- wins: the macro's (another computer played since) or this computer's (a
 -- change here never reached the macro).
-A.SAVE_EVERY = 300
+A.SAVE_EVERY = 120 -- at most 2 min lost to a crash, which the 2 min gap rule ignores
 function A.MarkSave()
     char.saveSeq = (char.saveSeq or 0) + 1
     A.saveDirty, A.savedAt = true, GetTime()
@@ -1067,15 +1083,88 @@ function A.FlushSave()
         A.saveDirty = nil
         Debug(SENT .. " your pledge (" .. (record.level > 0 and ("since level " .. record.level) or "not sworn")
             .. ", save #" .. record.n .. ") to the " .. A.SAVE_NAME .. " macro.", true)
+    elseif why == "full" then
+        A.saveDirty = nil
+        if record.level > 0 then A.ShowMacrosFull() end
     elseif why ~= "combat" then
         A.saveDirty = nil
         if not A.saveWarned then
             A.saveWarned = true
-            Print(why == "full" and ("No free character macro slot for the " .. A.SAVE_NAME
-                .. " macro, so your pledge won't follow you to other computers.")
-                or "Couldn't save your pledge to a macro on this client; it stays on this computer only.")
+            Print("Couldn't save your pledge to a macro on this client; it stays on this computer only.")
         end
     end
+end
+-- No free character macro slot: a dialog like the pledge prompt asks for
+-- one to be cleared. Shown once a session unless Retry finds them still full.
+function A.ShowMacrosFull()
+    local f = A.macrosFull
+    if not f then
+        f = CreateFrame("Frame", "HonorBoundMacrosFull", UIParent, "BackdropTemplate")
+        f:SetSize(380, 196)
+        f:SetPoint("CENTER", 0, 180)
+        f:SetFrameStrata("DIALOG")
+        f:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true, tileSize = 32, edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 },
+        })
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        f.header = f:CreateTexture(nil, "ARTWORK")
+        f.header:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
+        f.header:SetSize(300, 64)
+        f.header:SetPoint("TOP", 0, 12)
+        f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        f.title:SetPoint("TOP", f.header, "TOP", 0, -14)
+        f.title:SetText("HonorBound")
+        f.icon = f:CreateTexture(nil, "ARTWORK")
+        f.icon:SetSize(72, 72)
+        f.icon:SetPoint("TOPLEFT", 20, -34)
+        f.heading = f:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+        f.heading:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, -6)
+        f.heading:SetWidth(258)
+        f.heading:SetJustifyH("LEFT")
+        f.heading:SetText("Your character macros are full")
+        f.text = f:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        f.text:SetPoint("TOPLEFT", f.heading, "BOTTOMLEFT", 0, -8)
+        f.text:SetWidth(258)
+        f.text:SetJustifyH("LEFT")
+        f.text:SetText("HonorBound saves your pledge in a character macro so it follows you to other computers."
+            .. " Delete one character macro, then click Retry.")
+        local open = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        open:SetSize(110, 26)
+        open:SetPoint("BOTTOMLEFT", 22, 18)
+        open:SetText("Open macros")
+        open:SetScript("OnClick", function()
+            if ShowMacroFrame then ShowMacroFrame() else Print("Type /macro to open your macros.") end
+        end)
+        local retry = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        retry:SetSize(90, 26)
+        retry:SetPoint("LEFT", open, "RIGHT", 6, 0)
+        retry:SetText("Retry")
+        retry:SetScript("OnClick", function()
+            f:Hide()
+            A.MarkSave()
+            A.FlushSave()
+            if not A.saveDirty and not f:IsShown() then Print("Your pledge is saved in the " .. A.SAVE_NAME .. " macro.") end
+        end)
+        f.retry = retry
+        local later = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        later:SetSize(90, 26)
+        later:SetPoint("BOTTOMRIGHT", -22, 18)
+        later:SetText("Not now")
+        later:SetScript("OnClick", function()
+            f:Hide()
+            Print("Your pledge stays on this computer only until a character macro slot is free. /honor save tries again.")
+        end)
+        A.macrosFull = f
+    end
+    f.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
+    f:Show()
 end
 -- At login, once macros are loaded: settle the record, then ask for /played
 -- (assessing before this could compare against an out-of-date copy).
@@ -1643,6 +1732,7 @@ local function OnTooltip(tooltip)
 end
 local function TickWork(now)
     A.TrackPlayed()
+    A.CheckPlayedAnswer(now)
     if A.saveSynced and char.sworn and char.verify and now - (A.savedAt or 0) >= A.SAVE_EVERY then A.MarkSave() end
     if A.saveDirty then A.FlushSave() end
     for guid, peer in pairs(peers) do
@@ -1717,6 +1807,17 @@ SlashCmdList.HONORBOUND = function(input)
                 or db.chatIcons == false and "off (/honor chat on)" or "on")
                 .. (IsAddOnLoaded and IsAddOnLoaded("Prat-3.0") and ". Prat is loaded and may hide them." or "."))
             Debug("\"Sent\" means the game accepted it, not that anyone received it.")
+        end
+        return
+    end
+    if (input or ""):lower():match("^%s*save%s*$") then
+        if char.sworn == nil then Print("Nothing to save: you haven't sworn on this character.") return end
+        A.MarkSave()
+        A.FlushSave()
+        if not A.saveDirty and not (A.macrosFull and A.macrosFull:IsShown()) then
+            Print("Your pledge is saved in the " .. A.SAVE_NAME .. " macro.")
+        elseif A.saveDirty then
+            Print("You're in combat; your pledge will be saved when it ends.")
         end
         return
     end
