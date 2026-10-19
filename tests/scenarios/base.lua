@@ -109,7 +109,11 @@ end
 ChatFrameUtil = { AddSenderNameFilter = function(f) ChatFrameUtil.filter = f end, RemoveSenderNameFilter = function() end }
 ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
 function ChatFrame_AddMessageEventFilter(event, filter) systemFilters[event] = filter end
-function UnitGUID(unit) return units[unit] and units[unit].guid end
+-- Like the game: no unit is a usage error, not nil.
+function UnitGUID(unit)
+    if type(unit) ~= "string" then error("Usage: UnitGUID(unit)", 2) end
+    return units[unit] and units[unit].guid
+end
 function UnitIsPVP(unit) return units[unit] and units[unit].flagged end
 function UnitFactionGroup(unit) return units[unit] and units[unit].faction end
 function GetPVPDesired() return desired end

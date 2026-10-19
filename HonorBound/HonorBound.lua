@@ -79,6 +79,7 @@ local function Secret(value)
     return issecretvalue and issecretvalue(value)
 end
 local function GUID(unit)
+    if type(unit) ~= "string" then return end
     local value = UnitGUID(unit)
     if Secret(value) or not A.ValidGUID(value) then return end
     return value
@@ -719,7 +720,7 @@ local function CrestLook(texture, state)
     texture:SetAlpha(1)
 end
 local function OverlayState(unit)
-    if not (debugEnabled or simPercent) then return end
+    if not unit or not (debugEnabled or simPercent) then return end
     return DebugState(GUID(unit))
 end
 
@@ -1316,14 +1317,15 @@ local function PlateCrest(unit)
 end
 -- A nameplate that failed to refresh: say so (once a minute, debug or not,
 -- since it means a missing crest), with the game's error for a bug report.
-local plateErrorAt = -100
-local function PlateError(unit, err)
-    Debug("Couldn't update the nameplate crest on " .. tostring(unit) .. ": " .. tostring(err))
-    if GetTime() - plateErrorAt >= 60 then
-        plateErrorAt = GetTime()
-        Print("A nameplate crest couldn't be updated (" .. tostring(err) .. "). Other nameplates still are.")
+local errorAt = {}
+local function ReportError(what, err)
+    Debug("Error while updating " .. what .. ": " .. tostring(err))
+    if GetTime() - (errorAt[what] or -100) >= 60 then
+        errorAt[what] = GetTime()
+        Print("Couldn't update " .. what .. " (" .. tostring(err) .. "). Everything else still updates.")
     end
 end
+local function PlateError(unit, err) ReportError("a nameplate crest", err) end
 -- /honor why: for the target (or mouseover), every condition behind their
 -- nameplate crest, to find out why one is missing. Read only.
 local PLATE_ADDONS = {"Plater", "TidyPlates_ThreatPlates", "TidyPlates", "BetterBlizzPlates", "Kui_Nameplates", "NeatPlates"}
@@ -1350,7 +1352,10 @@ local function WhyNoCrest(say)
     local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
     say("  Same faction (can be whispered): " .. yes(not Secret(theirs) and theirs == ours)
         .. ". PvP-flagged right now: " .. yes(Flagged(unit)) .. (InPausedInstance() and " (inside: not needed)" or "") .. ".")
-    say("  Should wear a crest: " .. yes(Status(unit) ~= nil) .. ". Nameplate crests: " .. yes(db.plates) .. ".")
+    local wearing = Status(unit) ~= nil
+    local overlay = not wearing and OverlayState(unit)
+    say("  Should wear a crest: " .. yes(wearing) .. ". Nameplate crests: " .. yes(db.plates) .. "."
+        .. (overlay and (" Debug crest expected: " .. (overlay == "asked" and "light grey (being asked)" or "dark grey (no addon)") .. ".") or ""))
     local plateUnit
     for u in pairs(plates) do if GUID(u) == guid then plateUnit = u end end
     if not plateUnit then say("  Nameplate: none on screen for them.") return end
@@ -1385,24 +1390,30 @@ RefreshPlate = function(unit)
         crest:Hide()
     end
 end
+-- One unit frame's crest (player, target, focus, party).
+local function RefreshWidget(widget)
+    widget.unit = WidgetUnit(widget)
+    Attach(widget)
+    local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
+    local state = not wearing and OverlayState(widget.unit)
+    if wearing or state then
+        widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
+        CrestLook(widget.crest, state or nil)
+        if not widget:IsShown() then widget.fade:Play() end
+        widget:Show()
+    else
+        widget:Hide()
+    end
+    -- Blizzard shows and hides the icon itself; alpha is ours to set.
+    if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
+end
 Refresh = function()
     if not db then return end
     DiscoverFrames()
+    -- Each frame on its own: one failing must never skip the nameplates.
     for _, widget in ipairs(widgets) do
-        widget.unit = WidgetUnit(widget)
-        Attach(widget)
-        local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
-        local state = not wearing and OverlayState(widget.unit)
-        if wearing or state then
-            widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
-            CrestLook(widget.crest, state or nil)
-            if not widget:IsShown() then widget.fade:Play() end
-            widget:Show()
-        else
-            widget:Hide()
-        end
-        -- Blizzard shows and hides the icon itself; alpha is ours to set.
-        if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
+        local ok, err = pcall(RefreshWidget, widget)
+        if not ok then ReportError("a unit frame crest", err) end
     end
     -- Take the nameplates from the game each pass rather than trusting that
     -- every "added" event arrived (loading screens, reloads), and refresh
@@ -1484,8 +1495,7 @@ local function OnTooltip(tooltip)
     if Secret(unit) or not unit then return end
     if Status(unit) then TooltipLines(tooltip, unit) end
 end
-local function Tick()
-    local now = GetTime()
+local function TickWork(now)
     for guid, peer in pairs(peers) do
         if now - peer.seen >= A.TTL then peers[guid] = nil end
     end
@@ -1503,6 +1513,11 @@ local function Tick()
     if lastPayload ~= A.Encode(myGUID or "", Sworn()) or lastPledgePayload ~= PledgePayload() or not lastAnnounce or now - lastAnnounce >= 60 then
         Announce(true)
     end
+end
+-- Once a second. The redraw runs even if the work before it fails.
+local function Tick()
+    local ok, err = pcall(TickWork, GetTime())
+    if not ok then ReportError("discovery", err) end
     Refresh()
 end
 local function PrintStatus()

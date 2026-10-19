@@ -110,7 +110,11 @@ end
 ChatFrameUtil = { AddSenderNameFilter = function(f) ChatFrameUtil.filter = f end, RemoveSenderNameFilter = function() end }
 ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
 function ChatFrame_AddMessageEventFilter(event, filter) systemFilters[event] = filter end
-function UnitGUID(unit) return units[unit] and units[unit].guid end
+-- Like the game: no unit is a usage error, not nil.
+function UnitGUID(unit)
+    if type(unit) ~= "string" then error("Usage: UnitGUID(unit)", 2) end
+    return units[unit] and units[unit].guid
+end
 function UnitIsPVP(unit) return units[unit] and units[unit].flagged end
 function UnitFactionGroup(unit) return units[unit] and units[unit].faction end
 function GetPVPDesired() return desired end
@@ -944,11 +948,46 @@ debugLines = {}
 advance(5) -- no NAME_PLATE_UNIT_ADDED for either
 check(plate2.UnitFrame.HonorBoundCrest and plate2.UnitFrame.HonorBoundCrest.shown, "an unannounced nameplate still gets its crest")
 local reported = 0
-for _, line in ipairs(debugLines) do if line:find("A nameplate crest couldn't be updated", 1, true) then reported = reported + 1 end end
+for _, line in ipairs(debugLines) do if line:find("Couldn't update a nameplate crest", 1, true) then reported = reported + 1 end end
 check(reported == 1, "a failing nameplate is reported once, not every second (" .. reported .. ")")
 C_NamePlate = realPlates
 units.nameplate2, units.nameplate3 = nil, nil
 event("NAME_PLATE_UNIT_REMOVED", "nameplate2")
 event("NAME_PLATE_UNIT_REMOVED", "nameplate3")
 SlashCmdList.HONORBOUND("sim off")
+-- Debug mode with Blizzard's empty party frames (not in a party): a frame
+-- with no unit must not stop nameplates from updating.
+PartyFrame = {}
+for i = 1, 4 do
+    local member = object("PartyMemberFrame" .. i)
+    member.shown, member.unit = false, nil
+    PartyFrame["MemberFrame" .. i] = member
+end
+SlashCmdList.HONORBOUND("debug on")
+local asked = "Player-99-0EE201"
+units.nameplate1 = { guid = asked, flagged = true, faction = units.player.faction, name = "Asked", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+local crestNow = plate.UnitFrame.HonorBoundCrest
+check(not crestNow.shown, "a stranger's nameplate starts without a crest")
+advance(2)
+check(crestNow.shown and crestNow.desaturated and crestNow.tint[2] == 1, "with empty party frames, the nameplate still turns light grey once they're being asked")
+SlashCmdList.HONORBOUND("debug off")
+PartyFrame = nil
+-- A failure in the once-a-second work never stops the redraw.
+SlashCmdList.HONORBOUND("debug on")
+local ruledLater = "Player-99-0EE301"
+units.nameplate1 = { guid = ruledLater, flagged = false, faction = units.player.faction, name = "Later", realm = "Other Realm" }
+local realLockdown = C_ChatInfo.InChatMessagingLockdown
+C_ChatInfo.InChatMessagingLockdown = function() error("broken tick") end
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+HonorBoundDB.noAddon[ruledLater] = time() + 7200 -- learned after the nameplate appeared
+debugLines = {}
+advance(2)
+local tickReported = 0
+for _, line in ipairs(debugLines) do if line:find("Couldn't update discovery (", 1, true) then tickReported = tickReported + 1 end end
+check(tickReported == 1, "a broken tick is reported once (" .. tickReported .. ")")
+local later = plate.UnitFrame.HonorBoundCrest
+check(later.shown and later.desaturated and later.tint[1] < 0.5, "the nameplate still redraws (dark grey) while the tick is broken")
+C_ChatInfo.InChatMessagingLockdown = realLockdown
+SlashCmdList.HONORBOUND("debug off")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")
