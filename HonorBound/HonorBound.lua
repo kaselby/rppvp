@@ -114,6 +114,14 @@ local function ChatFaction(guid)
     end
     return Faction("player")
 end
+-- A chat sender on our faction, by race: true, false, or nil if the game
+-- hasn't said. Chat whispers anyone not known to be on the other side, but
+-- shows a saved crest only for our own.
+local function SameFaction(guid)
+    local race = GetPlayerInfoByGUID and select(4, GetPlayerInfoByGUID(guid))
+    if Secret(race) or not RACE_FACTION[race] then return nil end
+    return RACE_FACTION[race] == Faction("player")
+end
 local function InPausedInstance()
     if not IsInInstance then return false end
     local inside, kind = IsInInstance()
@@ -2040,7 +2048,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             if guid == myGUID then return Sworn() end
             local peer = peers[guid]
             if peer and GetTime() - peer.seen < A.TTL then return peer.sworn end
-            return Cached(guid)
+            -- The saved list is account-wide: another character's knowledge
+            -- of the other faction can't be refreshed from here, so skip it.
+            return SameFaction(guid) == true and Cached(guid)
         end, ChatFaction, function(guid)
             -- Grey crests in chat only while debugging or simulating.
             if debugEnabled or simPercent then return DebugState(guid) end
@@ -2099,6 +2109,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif probeChat[event] then
         local sender, guid = select(2, ...), select(12, ...)
         if Secret(guid) or not A.ValidGUID(guid) then return end
+        -- Whispers can't cross factions.
+        if SameFaction(guid) == false then return end
         -- Chat gives "First Surname" (a space, no realm), which bounces as a
         -- whisper address; the whisper form is "First-Surname".
         Query(guid, PRIORITY_CHAT, Address(FullName(sender)))

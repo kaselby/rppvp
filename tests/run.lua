@@ -846,6 +846,7 @@ players[sv] = { name = "Saved Status", realm = "ClassicBetaPvE" }
 addon("WQ|1|" .. sv .. "|1|20|0.4.3", "Saved Status-ClassicBetaPvE")
 check(HonorBoundDB.likely[sv] and HonorBoundDB.likely[sv].sworn == true, "an answer saves the oath status with the name")
 HonorBoundDB.likely[cg] = { name = "Cache-Dname", seen = time(), sworn = true }
+players[cg] = { name = "Cache", realm = "Dname" } -- chat knows their race (and so faction)
 units.nameplate1 = { guid = cg, flagged = true, faction = units.player.faction, name = "Cache", realm = "Dname" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(plate.UnitFrame.HonorBoundCrest.shown, "saved status shows the crest at once")
@@ -962,7 +963,7 @@ units.target = nil
 -- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
 -- in its own process by tests/scenario.lua.
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near"}
+local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near", "chat_faction"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
