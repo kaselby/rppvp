@@ -136,6 +136,8 @@ local inGuild = true
 function IsInGuild() return inGuild end
 local lockdown, players, systemFilters, channelResult, whisperResult = false, {}, {}, nil, nil
 function UnitIsPlayer(unit) return units[unit] ~= nil end
+-- Near enough to see; a unit can say otherwise (a party member elsewhere).
+function UnitIsVisible(unit) return units[unit] ~= nil and units[unit].far ~= true end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
 function GetPlayerInfoByGUID(guid)
     local p = players[guid]
@@ -960,7 +962,7 @@ units.target = nil
 -- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
 -- in its own process by tests/scenario.lua.
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots"}
+local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")

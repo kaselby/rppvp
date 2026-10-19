@@ -135,6 +135,8 @@ local inGuild = true
 function IsInGuild() return inGuild end
 local lockdown, players, systemFilters, channelResult, whisperResult = false, {}, {}, nil, nil
 function UnitIsPlayer(unit) return units[unit] ~= nil end
+-- Near enough to see; a unit can say otherwise (a party member elsewhere).
+function UnitIsVisible(unit) return units[unit] ~= nil and units[unit].far ~= true end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
 function GetPlayerInfoByGUID(guid)
     local p = players[guid]

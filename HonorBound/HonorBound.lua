@@ -126,8 +126,15 @@ end
 -- groupInside.at[guid]: when they last said so. groupInside.told: whether
 -- our own last announcement said we were inside.
 local groupInside = {fresh = 150, at = {}, told = false}
+-- Our own dungeon only covers players near us (who are in it too), not
+-- party members on the frames who are outside.
+local function NearUs(unit)
+    if unit == "player" or not UnitIsVisible then return true end
+    local visible = UnitIsVisible(unit)
+    return Secret(visible) or visible == true
+end
 local function FlaggedOrInside(unit, guid)
-    if Flagged(unit) or InPausedInstance() then return true end
+    if Flagged(unit) or (InPausedInstance() and NearUs(unit)) then return true end
     local at = guid and groupInside.at[guid]
     return at ~= nil and GetTime() - at < groupInside.fresh
 end
@@ -1731,6 +1738,9 @@ local function OnMessage(prefix, message, route, sender)
         end
         -- Hearing from someone always overrides an earlier "no addon".
         noAddon[guid] = nil
+        -- It answers a whisper of ours still out to them, too: without this
+        -- that whisper times out and marks a known addon user as without it.
+        if pending[guid] then pending[guid] = nil stats.answered = stats.answered + 1 end
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
         -- Remember sworn players we hear from directly (group, guild, realm
