@@ -1,8 +1,4 @@
--- The settings page under Options > AddOns > HonorBound. Every setting here
--- is also a slash command; both read and write the same saved values.
--- Uses the game's Settings API (Blizzard_Settings_Shared, same on 12.1.5 and
--- Classic Era); on a client without it there's no page and the slash
--- commands still work.
+-- Options > AddOns > HonorBound. Every setting is also a slash command.
 local _, A = ...
 
 local POPUP_MIN, POPUP_MAX, POPUP_DEFAULT = 10, 120, 30

@@ -1,20 +1,5 @@
 -- HonorBound: a community crest for players sworn to RP-PvP.
---
--- The oath. Each character swears once. A sworn character stays flagged for
--- PvP: "Disable" in the portrait menu is greyed out, and if anything unflags
--- you (typing /pvp, entering a dungeon) you get GRACE seconds to reflag
--- before the oath breaks. A broken oath can be sworn again with /honor swear.
---
--- Reflagging. Blizzard won't let addons set the flag; only your own click or
--- keypress can. So while a sworn player is unflagged, the addon borrows their
--- action bar keys: the next press runs /pvp and then the ability on that key,
--- and the keys go back at once. /pvp is left alone, because a replaced /pvp
--- can't flag you either. Dungeons and raids pause the countdown (you can't
--- reflag inside), and it restarts when you leave.
---
--- The badge. Your crest shows only while you're sworn and flagged. Other
--- players' crests need both their sworn broadcast and the server's live flag
--- (UnitIsPVP), so an unflagged player never wears one.
+-- Addons can't set the PvP flag; only the player's own click or keypress can.
 local _, A = ...
 local MEDIA = "Interface\\AddOns\\HonorBound\\Media\\"
 local eventFrame = CreateFrame("Frame")
@@ -28,9 +13,7 @@ local Refresh, Announce, UpdatePrompt, RefreshPlate
 local function Print(text)
     DEFAULT_CHAT_FRAME:AddMessage("|cffffd479HonorBound:|r " .. text)
 end
--- Session-only diagnostics: no extra network traffic or saved logs.
--- "on" shows status updates, failures and a summary a minute; "verbose"
--- adds every whisper probe and reply.
+-- Session only; "verbose" adds every whisper.
 local debugEnabled, debugVerbose = false, false
 local function Debug(text, verbose)
     if debugEnabled and (debugVerbose or not verbose) then
@@ -38,12 +21,10 @@ local function Debug(text, verbose)
         DEFAULT_CHAT_FRAME:AddMessage("|cff9d9d9dHonorBound " .. clock .. "|r  " .. text)
     end
 end
--- Coloured first word so a line reads at a glance.
 local SENT, HEARD, FAILED = "|cffffd100Sent|r", "|cff55ff55Heard|r", "|cffff5555Couldn't send|r"
 local ROUTES = {CHANNEL = "the realm channel", GUILD = "your guild", PARTY = "your party",
     RAID = "your raid", INSTANCE_CHAT = "your instance group", WHISPER = "a whisper",
     YELL = "a yell", SAY = "say"}
--- Plain reasons for the game's addon-message result codes.
 local REASONS = {InvalidPrefix = "the addon's message name isn't registered",
     InvalidMessage = "the message was rejected", AddonMessageThrottle = "sending too fast, the game is throttling us",
     InvalidChatType = "that kind of message isn't allowed here", NotInGroup = "you're not in a group",
@@ -65,7 +46,6 @@ local function Reason(result)
     local name = CODE_NAMES[result]
     return name and REASONS[name] or ("the game refused it (code " .. tostring(result) .. ")")
 end
--- "1 player", "2 players".
 local function Count(n, word, plural)
     return n .. " " .. (n == 1 and word or (plural or word .. "s"))
 end
@@ -73,7 +53,6 @@ local function StatusWords(sworn, level)
     if not sworn then return "not sworn" end
     return level and level > 0 and ("sworn since level " .. level) or "sworn"
 end
--- Names and message descriptions need the discovery tables, defined below.
 local Who, Describe
 local function Secret(value)
     return issecretvalue and issecretvalue(value)
@@ -97,8 +76,7 @@ local function Faction(unit)
     if Secret(faction) or (faction ~= "Alliance" and faction ~= "Horde") then return "Alliance" end
     return faction
 end
--- Chat senders aren't units: read the faction from their race, falling back
--- to our own (whispers and most chat don't cross factions anyway).
+-- Chat senders aren't units: faction from race, else our own.
 local RACE_FACTION = {
     Human = "Alliance", Dwarf = "Alliance", NightElf = "Alliance", Gnome = "Alliance",
     Draenei = "Alliance", Worgen = "Alliance", VoidElf = "Alliance", LightforgedDraenei = "Alliance",
@@ -119,12 +97,8 @@ local function InPausedInstance()
     local inside, kind = IsInInstance()
     return inside and (kind == "party" or kind == "raid" or kind == "scenario") or false
 end
--- Dungeons and raids unflag you and you can't reflag inside, so there a
--- sworn player keeps the crest. Anyone we can see in one is in it with us;
--- a group member who's in one without us says so ("I" messages), and that
--- word holds for groupInside.fresh seconds unless they say they've left.
--- groupInside.at[guid]: when they last said so. groupInside.told: whether
--- our own last announcement said we were inside.
+-- Instances unflag you, so sworn players keep the crest inside. Group members
+-- inside without us say so (I messages); that holds for `fresh` seconds.
 local groupInside = {fresh = 150, at = {}, told = false}
 local function FlaggedOrInside(unit, guid)
     if Flagged(unit) or InPausedInstance() then return true end
@@ -140,12 +114,9 @@ local function FormatTime(seconds)
 end
 
 ---------------------------------------------------------------------------
--- Status updates go to the group and guild; everyone else is reached by
--- whisper. No hidden channel.
+-- Group and guild status
 
--- The client's per-prefix allowance (10, refilling 1 a second) doesn't apply
--- to whispers outside instanced content, so whispers go out unpaced there.
--- Inside dungeons and raids, and for group/guild messages, keep this budget.
+-- Send budget. Whispers outside instances are exempt from the client's limit.
 local TOKEN_MAX, TOKEN_RATE = 5, 0.5
 local tokens, tokenTime = TOKEN_MAX, 0
 local function Refill()
@@ -162,8 +133,6 @@ local function Instanced()
     local inside = IsInInstance()
     return inside and true or false
 end
--- Refused sends are always reported, debug or not: the first at once, then
--- one summary every 10 s so a burst doesn't flood chat.
 local REFUSED_EVERY = 10
 local refused = {count = 0, reasons = {}, reported = -100}
 local function NoteRefused(reason)
@@ -187,13 +156,12 @@ local function Send(message, route, target)
     local result = C_ChatInfo.SendAddonMessage(A.PREFIX, message, route, target)
     local ok = result == true or result == 0
     if not ok then
-        -- The client pushed back: stop optional group/guild traffic for a moment.
+        -- Refused: back off group/guild sends for a moment.
         tokens = math.min(tokens, -2)
         NoteRefused(Reason(result))
     end
     if debugEnabled then
         local where = route == "WHISPER" and ("a whisper to " .. tostring(target)) or ROUTES[route] or route
-        -- Failures always show; every successful send only in verbose.
         if ok then
             Debug(SENT .. " " .. Describe(message) .. " via " .. where .. ".", true)
         else
@@ -217,13 +185,10 @@ Announce = function(force)
     local payload = A.Encode(myGUID, Sworn())
     local pledgePayload = PledgePayload()
     local inside = InPausedInstance()
-    -- Include metadata changes in the existing announcement throttle.
     local unchanged = payload == lastPayload and pledgePayload == lastPledgePayload and inside == groupInside.told
-    -- Keep repeated world/group events from flooding the group,
-    -- but let a changed oath through straight away.
+    -- A change goes at once; repeats wait at least 3 s.
     if unchanged and lastAnnounce and now - lastAnnounce < 3 then return end
     if not force and unchanged and lastAnnounce and now - lastAnnounce < 60 then return end
-    -- Nothing got through last time: wait before trying again.
     if now < announceRetryAt then return end
     local reached = {}
     local function To(route, target, extra)
@@ -232,8 +197,7 @@ Announce = function(force)
             reached[#reached + 1] = ROUTES[route]
         end
     end
-    -- The group hears whether we're inside: while we are, and once more
-    -- when we come out.
+    -- I message while inside, and once more on leaving.
     if GroupRoute() then To(GroupRoute(), nil, (inside or groupInside.told) and A.EncodeInside(myGUID, inside)) end
     if IsInGuild() then To("GUILD") end
     local mine = StatusWords(Sworn(), Sworn() and A.PledgeLevel(char))
@@ -246,32 +210,26 @@ Announce = function(force)
     end
 end
 ---------------------------------------------------------------------------
--- Whisper probes: everyone we see (nameplates, mouseover, target, chat) is
--- asked directly, same realm or not. A probe carries our own status, so the
--- other side learns us from it and never needs to probe back. One reply
--- completes the exchange.
+-- Whisper probes. A probe carries our status, so one reply completes the exchange.
 
-local PROBE_TIMEOUT = 30         -- no reply by then: treat as no addon
-local PROBE_STALE = 30           -- queued this long without sending (instances only): drop
-local NO_ADDON = 7200            -- our own silent probe: don't ask for 2 hours
-local LIKELY_KEEP = 14 * 86400   -- remember addon users for two weeks
--- Refresh peers still in view well before they expire: REPROBE_AFTER plus up
--- to REPROBE_JITTER spreads re-checks out.
+local PROBE_TIMEOUT = 30         -- s without a reply: no addon
+local PROBE_STALE = 30           -- s queued unsent (probes and replies): drop
+local NO_ADDON = 7200            -- s
+local LIKELY_KEEP = 14 * 86400   -- s
+-- Re-check peers in view before they expire, spread by jitter.
 local REPROBE_AFTER, REPROBE_JITTER = A.TTL - 90, 45
 local QUEUE_MAX, REPLY_MAX, REPLY_GAP = 500, 200, 60
--- Lower sends first: known addon users, mouseover/target, chat, nameplates.
+-- Lower goes first.
 local PRIORITY_LIKELY, PRIORITY_UNIT, PRIORITY_CHAT, PRIORITY_PLATE = 0, 1, 2, 3
 local probes, probeCount, pending, replies, replied = {}, 0, {}, {}, {}
 local noAddon, likely = {}, {}  -- saved; keyed by GUID, times from time()
 local names, jitter = {}, {}
--- Optional pacing for testing: whispers per second, nil = unlimited.
+-- /honor rate: whispers per second, nil = unlimited.
 local whisperCap
 local stats = {probed = 0, answered = 0, silent = 0, unreachable = 0}
 
--- Simulation (/honor sim N): N% of the players we ask pretend to have the
--- addon and answer quickly. Everything else stays real: probes, budget,
--- timeouts and the no-addon list. Who pretends is a fixed hash of the GUID,
--- so every tester with the same N sees the same players. Session only.
+-- /honor sim N: N% of players asked answer as addon users, picked by GUID hash
+-- so every tester with the same N sees the same ones.
 local simPercent
 local SIM_DELAY = {0.5, 3} -- round trip plus the other side's reply queue
 -- Seen-to-result timings for the coverage line: {total seconds, count}.
@@ -286,14 +244,11 @@ A.SimHash = SimHash
 local function Simulated(guid)
     return simPercent ~= nil and SimHash(guid) < simPercent
 end
--- On the no-addon list right now. A simulated user stands in for someone who
--- has the addon, who wouldn't be on it, so the list never blocks them.
+-- Simulated users are never ruled out.
 local function RuledOut(guid)
     return noAddon[guid] and time() < noAddon[guid] and not Simulated(guid)
 end
--- A remembered addon user's last known oath. It shows their crest the moment
--- they're seen, while a re-check goes out; a fresh answer replaces it, and it
--- stops counting after CACHE_MISSES unanswered re-checks in a row.
+-- A remembered user's saved oath, until CACHE_MISSES re-checks go unanswered.
 local CACHE_MISSES = 2
 local function Cached(guid)
     local entry = likely[guid]
@@ -309,7 +264,7 @@ end
 local function TimeProbe(guid)
     if not probeTimed[guid] then probeTimed[guid] = true Timed("probe", guid) end
 end
--- First result only: a later refresh of the same player isn't "populating".
+-- Only the first result after a sighting is timed.
 local function TimeResult(kind, guid)
     Timed(kind, guid)
     if seenAt[guid] then seenAt[guid] = false end
@@ -335,10 +290,8 @@ local function FullName(name, realm)
     end
     return name
 end
--- Forever names are "First Surname". Whispers there go to "First-Surname",
--- the form UnitName gives (surname in the realm slot); "First Surname-Realm",
--- from GetPlayerInfoByGUID or a whisper's sender, bounces. Elsewhere names
--- have no spaces and pass through unchanged.
+-- Forever names are "First Surname": whispers must go to "First-Surname" (as
+-- UnitName gives it); "First Surname-Realm" bounces.
 local function Address(name)
     if type(name) ~= "string" or Secret(name) then return name end
     local first, surname = name:match("^([^%s%-]+)%s+([^%-]+)")
@@ -353,14 +306,12 @@ end
 local function ValidName(name)
     return type(name) == "string" and #name <= 64 and name:match("^[^%-|]+%-[^%-|]+$") ~= nil
 end
--- A player's name for debug lines, falling back to a short ID.
 Who = function(guid)
     if not guid then return "someone" end
     if guid == myGUID then return "you" end
     return names[guid] or GuidName(guid) or (likely[guid] and likely[guid].name)
         or ("player " .. (guid:match("^Player%-(.+)$") or guid))
 end
--- What an addon message says, in words.
 Describe = function(message)
     local kind = message:match("^(%u+)|")
     if kind == "S" then
@@ -412,17 +363,14 @@ local function FoundPayload(guid, name, peer)
     return ("F|1|%s|%s|%d|%d|%s"):format(guid, name, peer.sworn and 1 or 0,
         peer.pledgedSinceLevel or 0, peer.version or "?")
 end
--- Same status as the last one shared for this player?
 local function SameStatus(record, peer)
     return record and record.sworn == peer.sworn and record.level == (peer.pledgedSinceLevel or 0)
 end
 
--- A player's status changed: fix the crest on their recent chat lines too.
 local function ChatChanged(guid)
     if A.RefreshChatFor then A.RefreshChatFor(guid) end
 end
--- A simulated user answering our probe. Only resolves if we're still
--- waiting: a real reply, an unreachable error or a timeout wins.
+-- Only if still pending: a real reply, error or timeout wins.
 local function SimAnswer(guid, name)
     if not simPercent or not pending[guid] then return end
     pending[guid] = nil
@@ -444,7 +392,6 @@ end
 local function Probe(guid, priority, name)
     local now = GetTime()
     local peer = peers[guid]
-    -- Spread re-probes so everyone doesn't refresh the same player at once.
     jitter[guid] = jitter[guid] or math.random(0, REPROBE_JITTER)
     if peer and now - peer.seen < REPROBE_AFTER + jitter[guid] then return end
     if pending[guid] or RuledOut(guid) then return end
@@ -463,7 +410,6 @@ end
 local function Unqueue(guid)
     if probes[guid] then probes[guid], probeCount = nil, probeCount - 1 end
 end
--- Everyone gets a whisper probe, same realm or not.
 local function Query(guid, priority, name)
     if not guid or not myGUID or guid == myGUID then return end
     return Probe(guid, priority or PRIORITY_PLATE, name)
@@ -471,15 +417,14 @@ end
 local function QueryUnit(unit, priority)
     local guid = GUID(unit)
     if not guid or guid == myGUID or not UnitIsPlayer(unit) then return end
-    -- Whispers can't cross factions; skip anyone we couldn't reach anyway.
+    -- Whispers don't cross factions.
     local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
     if Secret(theirs) or Secret(ours) or theirs ~= ours then return end
     Query(guid, priority, FullName(UnitName(unit)))
 end
 
 local function MarkNoAddon(guid, why)
-    -- A remembered user gets a second chance: one dropped whisper shouldn't
-    -- hide a crest. The next sighting asks again.
+    -- One dropped whisper shouldn't hide a remembered user's crest.
     local entry = likely[guid]
     if entry and (entry.misses or 0) + 1 < CACHE_MISSES then
         entry.misses = (entry.misses or 0) + 1
@@ -493,13 +438,10 @@ local function MarkNoAddon(guid, why)
     ChatChanged(guid)
 end
 
--- Whether another whisper may go out this tick: unlimited outside instances
--- unless /honor rate sets a cap; inside, the client's budget applies.
 local function MayWhisper(sentThisTick)
     if Instanced() then return Afford(1) end
     return not whisperCap or sentThisTick < whisperCap
 end
--- Every tick: all waiting replies, then every queued probe, most urgent first.
 local function PumpWhispers(now)
     for guid, p in pairs(pending) do
         if now - p.at > PROBE_TIMEOUT then
@@ -533,7 +475,7 @@ local function PumpWhispers(now)
         local guid, e = item.guid, item.e
         Unqueue(guid)
         local name = e.name or GuidName(guid)
-        if name then -- not resolvable yet: the next sighting re-queues
+        if name then -- else the next sighting re-queues
             pending[guid] = {at = now, name = name}
             stats.probed = stats.probed + 1
             Send(WhisperPayload("Q"), "WHISPER", name)
@@ -554,7 +496,7 @@ local function OnWhisper(message, sender)
     sender = Address(sender)
     local kind, guid, peer = DecodeWhisper(message)
     if not kind or guid == myGUID then return end
-    -- The status claims a GUID; it must belong to whoever sent it.
+    -- The claimed GUID must belong to the sender.
     local known = GuidName(guid)
     if known and known:match("^[^%-]+") ~= sender:match("^[^%-]+") then return end
     Debug(HEARD .. " " .. (kind == "Q" and "a probe from " or "a reply from ") .. sender .. ": they have the addon ("
@@ -566,13 +508,13 @@ local function OnWhisper(message, sender)
     pending[guid] = nil
     if probed then stats.answered = stats.answered + 1 end
     TimeResult("answer", guid)
-    -- Senders can arrive without a realm; prefer a full Name-Realm.
+    -- Senders can lack a realm; prefer a full Name-Realm.
     local name = (probed and probed.name) or known or sender
     if ValidName(name) then likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil,
         level = peer.pledgedSinceLevel} end
     Unqueue(guid)
     ChatChanged(guid)
-    -- Always answer a probe, even with ours in flight: ours may never arrive.
+    -- Answer even with our own probe in flight: it may never arrive.
     local queued = false
     for _, r in ipairs(replies) do queued = queued or r.name == name end
     if kind == "Q" and not queued and #replies < REPLY_MAX
@@ -581,11 +523,10 @@ local function OnWhisper(message, sender)
     end
     Refresh()
 end
--- A probe to someone unreachable comes back as a system error; hide it.
+-- A whisper to someone unreachable comes back as a system error; hide it.
 local function HideUnreachable(_, _, message)
     if Secret(message) or type(message) ~= "string" then return end
-    -- The server's own "too fast" notice: count it with the refused sends,
-    -- and leave the message visible.
+    -- The server's throttle notice counts as refused and stays visible.
     for _, notice in ipairs({ERR_CHAT_THROTTLED, ERR_GENERIC_THROTTLE}) do
         if type(notice) == "string" and message == notice then
             NoteRefused("the server says we're sending too fast")
@@ -609,7 +550,6 @@ local function HideUnreachable(_, _, message)
         end
     end
 end
--- Load the saved caches, dropping anything expired or malformed.
 local function LoadCaches()
     local now = time()
     db.noAddon = type(db.noAddon) == "table" and db.noAddon or {}
@@ -639,13 +579,11 @@ local function PruneCaches()
         if at and clock - at > 3600 then seenAt[guid], probeTimed[guid] = nil, nil end
     end
 end
--- Debug overlay states for players without a real crest.
 local function DebugState(guid)
     if not guid or guid == myGUID then return end
     if pending[guid] then return "asked" end
     if RuledOut(guid) then return "none" end
 end
--- How far discovery has got over the nameplates in view, and how long it took.
 local function Coverage()
     local addon, none, asked, queued, other, total = 0, 0, 0, 0, 0, 0
     local now = GetTime()
@@ -669,7 +607,6 @@ local function Coverage()
             simPercent and (" (Simulating " .. simPercent .. "% addon users.)") or "",
             avg(timings.probe), avg(timings.answer), avg(timings.none))
 end
--- One line a minute instead of a line per stranger.
 local function DebugSummary()
     if simPercent or next(plates) then Debug(Coverage()) end
     if stats.probed + stats.answered + stats.silent + stats.unreachable == 0 then return end
@@ -685,7 +622,7 @@ local function DebugSummary()
     Debug("Since the last summary: " .. table.concat(parts, ", ") .. ".")
     for key in pairs(stats) do stats[key] = 0 end
 end
--- Whether a unit wears the badge right now.
+-- Non-nil if the unit wears a crest right now.
 local function Status(unit)
     local guid = GUID(unit)
     if not guid then return end
@@ -698,20 +635,18 @@ local function Status(unit)
     end
     local peer = peers[guid]
     if peer and GetTime() - peer.seen < A.TTL then
-        -- Simulated users stand in for "wears a badge", flagged or not.
+        -- Simulated users wear it flagged or not.
         if peer.sworn and (peer.simulated or FlaggedOrInside(unit, guid)) then return peer end
         return
     end
-    -- Nothing fresh: their saved status, while the re-check is out. Only for
-    -- players a whisper can reach (our faction); nobody else gets re-checked.
+    -- Saved status while a re-check is out; only our faction can be re-checked.
     local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
     local reachable = not Secret(theirs) and not Secret(ours) and theirs == ours
     if reachable and Cached(guid) and FlaggedOrInside(unit, guid) then
         return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
     end
 end
--- Normal crest, or the debug overlay: light grey while being asked, dark grey
--- once marked no-addon.
+-- Debug overlay: light grey while being asked, dark grey once ruled out.
 local OVERLAY_TINT = {asked = {1, 1, 1}, none = {0.4, 0.4, 0.4}}
 local function CrestLook(texture, state)
     if texture.SetDesaturated then texture:SetDesaturated(state ~= nil) end
@@ -732,9 +667,7 @@ local function GreyOutDisable()
     UnitPopupPvpDisableButtonMixin.IsEnabled = function() return false end
     return true
 end
--- Greys out "Disable" in the portrait menu. /pvp is left alone: replacing it
--- would stop it flagging you too, and the reflag keys rely on it. Typing /pvp
--- to unflag just starts the grace countdown like any other unflag.
+-- /pvp is left alone: a replaced /pvp can't flag you, and reflag relies on it.
 local function Guard()
     if guarded then return end
     guarded = true
@@ -742,13 +675,8 @@ local function Guard()
 end
 
 ---------------------------------------------------------------------------
--- Reflag on your next keypress or click. While you're sworn and unflagged
--- outside an instance, your action bar keys are overridden by a secure button
--- whose macro is "/pvp" followed by "/click <the button that key presses>",
--- and transparent secure buttons sit over the bar buttons for mouse clicks.
--- Either way the use flags you and still triggers the ability. They're lifted
--- after one use, as soon as you're flagged, and just before combat (/pvp
--- toggles: a use while already flagged would unflag you).
+-- Reflag: while sworn and unflagged, bar keys and clicks run /pvp, then the
+-- ability. Lifted after one use and before combat, since /pvp toggles.
 
 local BAR_BINDINGS = {
     {"ACTIONBUTTON", "ActionButton"},
@@ -763,10 +691,7 @@ local BAR_BINDINGS = {
     {"BONUSACTIONBUTTON", "PetActionButton"},
     {"EXTRAACTIONBUTTON", "ExtraActionButton"},
 }
--- Keys checked for bar addons (Bartender, Dominos...), which bind keys to
--- their own buttons as "CLICK <button>:<mouse button>".
--- Only keys bound to such a CLICK command are borrowed: movement and other
--- keys are never touched.
+-- Only keys that press a bar button are borrowed; movement keys never are.
 local COMMON_KEYS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "`"}
 for letter in ("QWERTYUIOPASDFGHJKLZXCVBNM"):gmatch(".") do COMMON_KEYS[#COMMON_KEYS + 1] = letter end
 for i = 1, 12 do COMMON_KEYS[#COMMON_KEYS + 1] = "F" .. i end
@@ -774,9 +699,8 @@ for i = 0, 9 do COMMON_KEYS[#COMMON_KEYS + 1] = "NUMPAD" .. i end
 local reflagButton, reflagArmed, reflagArmedAt, reflagNotified
 local reflagPressedAt = -100
 
--- Away protection: while you're unflagged and doing nothing, the grace
--- countdown waits. Moving, turning, casting, combat or looting is activity;
--- chatting isn't. idle.after seconds without any of it counts as away.
+-- Grace pauses while away: idle.after seconds without moving, turning,
+-- casting, combat or looting. Chatting doesn't count.
 local idle = {last = GetTime(), after = 30}
 function idle.Note() idle.last = GetTime() end
 function idle.Poll()
@@ -789,13 +713,11 @@ function idle.Poll()
     end
 end
 function idle.Away() return GetTime() - idle.last >= idle.after end
--- You turned the flag off yourself (/pvp; the portrait menu is greyed out) rather than the
--- game doing it on a zone change: ask straight away, don't wait for a key.
+-- You unflagged yourself, not a zone change: the popup shows at once.
 idle.manual, idle.wasDesired = false, nil
 local overlayHost
 local overlays = {}
--- Runs after any borrowed key press or overlay click: the keys and overlays
--- go back at once (/pvp toggles, so a second use would unflag you).
+-- One use only: /pvp toggles, so a second would unflag you.
 local function ReflagPressed()
     Debug("Reflag key or click used.")
     reflagArmed, reflagPressedAt = false, GetTime()
@@ -810,21 +732,17 @@ local function CreateReflagButton()
     button:HookScript("PostClick", ReflagPressed)
     return button
 end
--- Presses a button both ways. A secure action button acts on key down or on
--- key up depending on the player's settings and ignores the other, so sending
--- both lets exactly one through, whichever way it is set.
+-- Secure buttons act on key down or up (player setting) and ignore the other,
+-- so sending both fires exactly one.
 local function ClickLines(name, mouse)
-    -- Stance and pet buttons act on every click, not on one half of it, so a
-    -- down plus an up would fire twice (shift in and straight back out).
+    -- Stance and pet buttons act on both halves: down plus up would fire twice.
     if name:find("^StanceButton") or name:find("^PetActionButton") then
         return ("/click %s %s"):format(name, mouse)
     end
     return ("/click %s %s 1\n/click %s %s"):format(name, mouse, name, mouse)
 end
--- The button a key presses right now. Override bindings (bar addons such as
--- Bartender take over the default keys) are checked first, so a key whose
--- Blizzard binding has been overridden presses the addon's button, not a
--- hidden Blizzard one.
+-- Override bindings first, so a key a bar addon took over presses its button,
+-- not a hidden Blizzard one.
 local function KeyButton(key)
     if not GetBindingAction then return end
     local action = GetBindingAction(key, true)
@@ -838,8 +756,7 @@ local function KeyButton(key)
     end
     if name and name ~= "HonorBoundReflagButton" and _G[name] then return name, mouse end
 end
--- Each borrowed key -> the macro lines that press what the key does now, and
--- every bar button worth covering for mouse clicks -> its mouse button.
+-- targets: key -> macro lines; buttons: bar button -> mouse button.
 local function ReflagTargets()
     local targets, seen, buttons = {}, {}, {}
     local function consider(key)
@@ -851,7 +768,6 @@ local function ReflagTargets()
             buttons[name] = buttons[name] or mouse
         end
     end
-    -- Keys the Blizzard bars are bound to.
     if GetBindingKey then
         for _, bar in ipairs(BAR_BINDINGS) do
             for i = 1, 12 do
@@ -859,8 +775,7 @@ local function ReflagTargets()
             end
         end
     end
-    -- Keys bound to a "CLICK <button>:<mouse button>" command, whatever the
-    -- key (bar addons that ship their own bindings).
+    -- Bar addons' own "CLICK <button>:<mouse>" bindings.
     if GetNumBindings and GetBinding then
         for i = 1, GetNumBindings() do
             local binding = {n = select("#", GetBinding(i)), GetBinding(i)}
@@ -873,7 +788,6 @@ local function ReflagTargets()
     for _, base in ipairs(COMMON_KEYS) do
         for _, key in ipairs({base, "SHIFT-" .. base, "CTRL-" .. base, "ALT-" .. base}) do consider(key) end
     end
-    -- Mouse clicks: every visible Blizzard bar button, bound to a key or not.
     for _, bar in ipairs(BAR_BINDINGS) do
         for i = 1, 12 do
             local name = bar[2] .. i
@@ -883,9 +797,7 @@ local function ReflagTargets()
     end
     return targets, buttons
 end
--- Transparent secure buttons laid over the bar buttons, shown only while
--- armed: a mouse click on a button runs /pvp and then clicks the button
--- underneath. Hiding the host hides them all, even in combat.
+-- Transparent secure buttons over the bar buttons, for mouse clicks.
 local function ShowOverlays(buttons)
     if not overlayHost then
         overlayHost = CreateFrame("Frame", nil, UIParent)
@@ -915,11 +827,10 @@ local function ShowOverlays(buttons)
     end
     overlayHost:Show()
 end
--- Returns whether keys and buttons are borrowed now.
+-- True while armed, or just used.
 local function ArmReflag()
     if reflagArmed then return true end
-    -- Just pressed: the flag may not have registered yet, and /pvp toggles.
-    -- Count as armed, without keys, until it has had time to.
+    -- Just used: the flag may not have registered yet, and /pvp toggles.
     if GetTime() - reflagPressedAt < 3 then return true end
     if not SetOverrideBindingClick or InCombatLockdown() or db.autoReflag == false then return false end
     reflagButton = reflagButton or CreateReflagButton()
@@ -937,8 +848,7 @@ local function ArmReflag()
     return true
 end
 local function DisarmReflag()
-    -- The overlays hold secure buttons, so hiding them is blocked in combat
-    -- just like changing key bindings. PLAYER_REGEN_DISABLED hides them first.
+    -- Blocked in combat; PLAYER_REGEN_DISABLED disarms first.
     if InCombatLockdown() then return end
     if overlayHost and overlayHost:IsShown() then overlayHost:Hide() end
     if not reflagArmed then return end
@@ -946,8 +856,6 @@ local function DisarmReflag()
     reflagArmed = false
     Debug("Reflag keys released.")
 end
--- A fresh grace period: no deadline yet, nothing carried over, and no
--- pause left from an earlier one.
 function idle.ResetGrace()
     deadline, char.graceLeft, idle.frozen = nil, nil, nil
 end
@@ -965,8 +873,7 @@ local function Break(reason)
     char.pledgedSinceLevel = nil
     char.sworn, char.joining = false, nil
     idle.ResetGrace()
-    -- Unsworn, nothing needs reflagging: the keys go back now (or, in
-    -- combat, from UpdatePrompt once it ends).
+    -- In combat, UpdatePrompt disarms once it ends.
     DisarmReflag()
     Print("Oath broken: " .. reason .. ". Your crest is gone. Type /honor swear to take it again.")
     Announce(true)
@@ -974,7 +881,7 @@ local function Break(reason)
 end
 
 ---------------------------------------------------------------------------
--- The prompt: a secure button runs the real /pvp from your click.
+-- The prompt
 
 local function CreatePrompt()
     local f = CreateFrame("Frame", "HonorBoundPrompt", UIParent, "BackdropTemplate")
@@ -1080,8 +987,7 @@ local function SetPromptShown(show)
     if show then prompt.flag:SetAttribute("type", "macro") end
     prompt:SetShown(show)
 end
--- Decides whether the prompt is up and what it says, and enforces the
--- grace deadline. Runs every second and on flag changes.
+-- Also enforces the grace deadline.
 UpdatePrompt = function()
     if not char or not prompt then return end
     prompt.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
@@ -1119,8 +1025,7 @@ UpdatePrompt = function()
         return
     end
     if char.sworn and InPausedInstance() then
-        -- You can't reflag inside; the countdown starts fresh outside. A flag
-        -- that dropped during the loading screen wasn't you.
+        -- Can't reflag inside; grace starts fresh outside.
         idle.ResetGrace()
         reflagArmedAt, idle.manual = nil, false
         DisarmReflag()
@@ -1129,13 +1034,11 @@ UpdatePrompt = function()
     end
     local left
     if char.sworn then
-        -- Our own countdown, even while the game's PvP timer runs after a
-        -- typed /pvp: only ours pauses while you're away.
-        -- Logged in unflagged: grace left from an earlier session carries over.
+        -- Our own countdown, not the game's PvP timer: ours pauses while away
+        -- and carries over a relog.
         deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
         idle.Poll()
         if idle.Away() then
-            -- Away: hold the countdown where it was.
             idle.frozen = idle.frozen or math.max(0, deadline - GetTime())
             deadline = GetTime() + idle.frozen
         else
@@ -1143,7 +1046,7 @@ UpdatePrompt = function()
         end
         left = deadline - GetTime()
         if left <= 0 then Break("you stayed unflagged too long") DisarmReflag() SetPromptShown(false) return end
-        -- Try the borrowed keys first; the popup follows if they go unused.
+        -- Borrowed keys first; the popup follows if they go unused.
         if ArmReflag() then
             if not reflagNotified then
                 reflagNotified = true
@@ -1178,7 +1081,7 @@ UpdatePrompt = function()
 end
 
 ---------------------------------------------------------------------------
--- Badges on the player, target and focus frames
+-- Unit frame crests and tooltips
 
 local function TooltipLines(tooltip, unit)
     tooltip:AddLine(("|T%sCrest%s.tga:18:18|t HonorBound"):format(MEDIA, Faction(unit)), 1, 0.83, 0.4)
@@ -1245,8 +1148,7 @@ local function PvpIcon(host, unit)
     if unit == "player" then return _G.PlayerPVPIcon end
     return _G[(host:GetName() or "") .. "TextureFramePVPIcon"]
 end
--- The crest stands in for the PvP icon. Atlas icons are cropped to the
--- glyph; the classic 64px file has the glyph in its top-left corner.
+-- Atlas icons are cropped to the glyph; the classic 64px file has it top-left.
 local function Attach(widget)
     local icon = PvpIcon(widget.host, widget.unit)
     local portrait = Portrait(widget.host, widget.unit)
@@ -1275,8 +1177,7 @@ local function DiscoverFrames()
             host.HonorBoundWidget = NewWidget(host, entry[2])
         end
     end
-    -- Blizzard's party frames (not the raid-style ones), made when the
-    -- party first shows. Each follows whichever unit its frame shows now.
+    -- Blizzard party frames (not raid-style), created when a party first shows.
     local party = _G.PartyFrame
     for i = 1, 4 do
         local host = party and party["MemberFrame" .. i]
@@ -1286,15 +1187,14 @@ local function DiscoverFrames()
         end
     end
 end
--- The unit a widget's frame shows right now, or nil if it isn't in use.
+-- nil if the frame isn't in use.
 local function WidgetUnit(widget)
     if not widget.party then return widget.unit end
     local host = widget.host
     local unit = host.GetUnit and host:GetUnit() or host.unit
     if type(unit) == "string" and not Secret(unit) and host:IsShown() then return unit end
 end
--- Nameplates: a small crest to the left of the name. Plates are recycled,
--- so the crest lives on the plate and is re-checked for each new unit.
+-- Plates are recycled: the crest lives on the plate, re-checked per unit.
 local function PlateCrest(unit)
     local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit(unit)
     if not plate or (plate.IsForbidden and plate:IsForbidden()) then return end
@@ -1315,8 +1215,7 @@ local function PlateCrest(unit)
     end
     return crest
 end
--- A nameplate that failed to refresh: say so (once a minute, debug or not,
--- since it means a missing crest), with the game's error for a bug report.
+-- Printed once a minute per kind, debug or not.
 local errorAt = {}
 local function ReportError(what, err)
     Debug("Error while updating " .. what .. ": " .. tostring(err))
@@ -1326,8 +1225,7 @@ local function ReportError(what, err)
     end
 end
 local function PlateError(unit, err) ReportError("a nameplate crest", err) end
--- /honor why: for the target (or mouseover), every condition behind their
--- nameplate crest, to find out why one is missing. Read only.
+-- /honor why: every condition behind a nameplate crest. Read only.
 local PLATE_ADDONS = {"Plater", "TidyPlates_ThreatPlates", "TidyPlates", "BetterBlizzPlates", "Kui_Nameplates", "NeatPlates"}
 local function WhyNoCrest(say)
     local unit = GUID("target") and "target" or "mouseover"
@@ -1390,7 +1288,6 @@ RefreshPlate = function(unit)
         crest:Hide()
     end
 end
--- One unit frame's crest (player, target, focus, party).
 local function RefreshWidget(widget)
     widget.unit = WidgetUnit(widget)
     Attach(widget)
@@ -1415,9 +1312,7 @@ Refresh = function()
         local ok, err = pcall(RefreshWidget, widget)
         if not ok then ReportError("a unit frame crest", err) end
     end
-    -- Take the nameplates from the game each pass rather than trusting that
-    -- every "added" event arrived (loading screens, reloads), and refresh
-    -- each one on its own so one failure can't skip the rest.
+    -- NAME_PLATE_UNIT_ADDED can be missed (loading screens, reloads).
     if C_NamePlate and C_NamePlate.GetNamePlates then
         for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
             local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
@@ -1451,7 +1346,7 @@ local function OnMessage(prefix, message, route, sender)
     end
     local insider, inside = A.DecodeInside(message)
     if insider then
-        -- Only a group member's word counts: they're the ones we can't see.
+        -- Only group members: they're the ones we can't see.
         if insider ~= myGUID and (route == "PARTY" or route == "RAID" or route == "INSTANCE_CHAT") then
             Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", true)
             groupInside.at[insider] = inside and GetTime() or nil
@@ -1465,17 +1360,13 @@ local function OnMessage(prefix, message, route, sender)
     if not guid then guid, peer = A.Decode(message) end
     if guid and guid ~= myGUID then
         if debugEnabled then
-            -- The status line every minute; the pledge-level companion only in verbose.
             Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", isPledge)
         end
-        -- Hearing from someone always overrides an earlier "no addon".
         noAddon[guid] = nil
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
-        -- Remember sworn players we hear from directly (group, guild, realm
-        -- channel) too, so their crest is back the moment we see them after a
-        -- relog. A remembered player's saved status follows what they say, so
-        -- a renounced oath can't come back from it either.
+        -- Remember sworn players heard here too, so their crest is back at once
+        -- after a relog; the saved status follows what they say.
         local saved = likely[guid]
         if not saved and peer.sworn then
             local name = GuidName(guid) or (type(sender) == "string" and not Secret(sender) and Address(sender))
@@ -1514,7 +1405,7 @@ local function TickWork(now)
         Announce(true)
     end
 end
--- Once a second. The redraw runs even if the work before it fails.
+-- The redraw runs even if the work fails.
 local function Tick()
     local ok, err = pcall(TickWork, GetTime())
     if not ok then ReportError("discovery", err) end
@@ -1676,19 +1567,18 @@ SlashCmdList.HONORBOUND = function(input)
     Refresh()
 end
 
--- Built while the game loads: secure buttons can't be set up in combat,
--- and a /reload can land you in combat before PLAYER_LOGIN.
+-- Built at load: secure buttons can't be set up in combat, and a /reload can
+-- land you in combat before PLAYER_LOGIN.
 prompt = CreatePrompt()
 
 for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT"}) do
     eventFrame:RegisterEvent(event)
 end
--- Speakers we might not know yet. Group and guild chat are covered by
--- their own routes, so only open chat feeds the probe queue.
+-- Group and guild speakers are heard on their own routes.
 local probeChat = {CHAT_MSG_SAY = true, CHAT_MSG_YELL = true, CHAT_MSG_EMOTE = true,
     CHAT_MSG_CHANNEL = true, CHAT_MSG_WHISPER = true}
 for event in pairs(probeChat) do eventFrame:RegisterEvent(event) end
--- Combat is polled (PLAYER_REGEN_DISABLED has its own handler below).
+-- Combat is polled in idle.Poll.
 idle.events = {PLAYER_STARTED_MOVING = true, UNIT_SPELLCAST_SENT = true, UNIT_SPELLCAST_SUCCEEDED = true,
     LOOT_OPENED = true}
 for event in pairs(idle.events) do eventFrame:RegisterEvent(event) end
@@ -1704,7 +1594,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         db.popupDelay = math.min(A.POPUP_MAX, math.max(A.POPUP_MIN, math.floor(tonumber(db.popupDelay) or A.POPUP_DEFAULT)))
         HonorBoundCharDB = type(HonorBoundCharDB) == "table" and HonorBoundCharDB or {}
         char = HonorBoundCharDB
-        -- Existing oaths start their history now; never invent an earlier level.
+        -- Never invent an earlier pledge level.
         A.EnsurePledge(char, UnitLevel("player"))
         myGUID = GUID("player")
         myServer = Server(myGUID)
@@ -1718,7 +1608,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             if peer and GetTime() - peer.seen < A.TTL then return peer.sworn end
             return Cached(guid)
         end, ChatFaction, function(guid)
-            -- Grey crests in chat only while debugging or simulating.
             if debugEnabled or simPercent then return DebugState(guid) end
         end)
         C_ChatInfo.RegisterAddonMessagePrefix(A.PREFIX)
@@ -1727,8 +1616,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         elseif GameTooltip:HasScript("OnTooltipSetUnit") then
             GameTooltip:HookScript("OnTooltipSetUnit", OnTooltip)
         end
-        -- The settings page is a convenience: if the game's Settings API ever
-        -- differs from what we expect, lose the page, not the addon.
+        -- If the Settings API differs, lose the page, not the addon.
         local built, category = pcall(A.InstallOptions, db, function(key)
             if key == "autoflag" then
                 if db.autoReflag == false then DisarmReflag() end
