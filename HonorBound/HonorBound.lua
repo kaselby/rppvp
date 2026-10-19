@@ -279,7 +279,7 @@ end
 -- completes the exchange.
 
 local PROBE_TIMEOUT = 30         -- no reply by then: treat as no addon
-local PROBE_STALE = 30           -- queued this long without sending (instances only): drop
+local PROBE_STALE = 30           -- queued this long without sending: drop (a re-sighting queues it again)
 local NO_ADDON = 7200            -- our own silent probe: don't ask for 2 hours
 local LIKELY_KEEP = 14 * 86400   -- remember addon users for two weeks
 -- Refresh peers still in view well before they expire: REPROBE_AFTER plus up
