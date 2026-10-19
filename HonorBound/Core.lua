@@ -1,5 +1,5 @@
 local _, Addon = ...
-Addon.VERSION = "0.6.0"
+Addon.VERSION = "0.7.0"
 Addon.PREFIX = "HONORBOUND1"
 Addon.TTL = 300     -- seconds before a silent peer is forgotten
 Addon.GRACE = 300   -- seconds a sworn player may stay unflagged before the oath breaks

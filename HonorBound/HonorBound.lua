@@ -957,6 +957,9 @@ local function Swear()
     idle.ResetGrace()
     Guard()
     Print("You've sworn the oath. Your crest shows to the community while you stay flagged.")
+    -- A fresh, verified record; if /played isn't known yet it starts when it is.
+    char.verify = A.PlayedNow() and A.NewVerify(A.PlayedNow()) or nil
+    A.MarkSave()
     Announce(true)
     Refresh()
 end
@@ -969,8 +972,151 @@ local function Break(reason)
     -- combat, from UpdatePrompt once it ends).
     DisarmReflag()
     Print("Oath broken: " .. reason .. ". Your crest is gone. Type /honor swear to take it again.")
+    char.verify = nil
+    A.MarkSave()
     Announce(true)
     Refresh()
+end
+
+-- Verification glue (the rules are in Verify.lua). Kept as fields on A:
+-- this file is near Lua's limit of 200 locals.
+-- /played as the server counts it now, once we've heard it this session.
+function A.PlayedNow()
+    if not A.playedAt then return end
+    return A.playedAt + (GetTime() - A.playedClock)
+end
+-- Ask the server for /played without printing it in chat (our request only;
+-- typing /played still prints as normal).
+function A.RequestPlayed()
+    if not RequestTimePlayed then return end
+    -- Hidden until our answer arrives (then for one more second), at most 30 s.
+    A.hidePlayedUntil = GetTime() + 30
+    for _, owner in ipairs({_G, ChatFrameUtil or {}}) do
+        local name = owner == _G and "ChatFrame_DisplayTimePlayed" or "DisplayTimePlayed"
+        local show = owner[name]
+        if type(show) == "function" and not A.playedHooked then
+            owner[name] = function(...)
+                if GetTime() < (A.hidePlayedUntil or 0) then return end
+                return show(...)
+            end
+            A.playedHooked = true
+        end
+    end
+    RequestTimePlayed()
+end
+function A.OnPlayed(total)
+    if type(total) ~= "number" then return end
+    A.playedAt, A.playedClock = total, GetTime()
+    C_Timer.After(1, function() A.hidePlayedUntil = 0 end)
+    if not char.sworn then return end
+    local record = char.verify
+    if not record then
+        -- Sworn before verification existed, or just now: it starts here.
+        char.verify = A.NewVerify(total)
+        A.verifyAssessed = true
+        A.MarkSave()
+        Debug("Verification of your pledge starts now.")
+        return
+    end
+    if A.verifyAssessed then return end
+    A.verifyAssessed = true
+    local gap, over = A.AssessVerify(record, total)
+    local allowed = A.VerifyAllowance(record, total)
+    if over then
+        Break("HonorBound missed " .. A.Duration(record.untracked) .. " of your play time, more than the "
+            .. A.Duration(allowed) .. " allowed")
+    elseif gap > 0 then
+        A.MarkSave()
+        Print("HonorBound didn't see " .. A.Duration(gap) .. " of your play time since your last session"
+            .. " (addon off, another computer, or a crash). Untracked so far: " .. A.Duration(record.untracked)
+            .. " of " .. A.Duration(allowed) .. " allowed.")
+    else
+        Debug("Verification: no untracked play since your last session.")
+    end
+end
+-- Keep the record's "seen" up to date while we're running.
+function A.TrackPlayed()
+    local now = A.PlayedNow()
+    if now and char.sworn and char.verify then char.verify.seen = math.max(char.verify.seen, now) end
+end
+
+-- The save macro (Save.lua). Every change (swear, break, a counted gap) and
+-- every SAVE_EVERY seconds while sworn bumps this computer's write counter
+-- and writes the macro, after combat if need be. At login the higher counter
+-- wins: the macro's (another computer played since) or this computer's (a
+-- change here never reached the macro).
+A.SAVE_EVERY = 300
+function A.MarkSave()
+    char.saveSeq = (char.saveSeq or 0) + 1
+    A.saveDirty, A.savedAt = true, GetTime()
+end
+function A.LocalSave()
+    if char.sworn == nil then return end
+    local level = char.sworn and A.PledgeLevel(char) or 0
+    if char.sworn and level == 0 then return end -- no level to save yet
+    local v = char.sworn and char.verify
+    return {level = level, since = v and v.since or 0, seen = v and v.seen or 0,
+        untracked = v and v.untracked or 0, n = char.saveSeq or 0}
+end
+function A.FlushSave()
+    if not A.saveDirty or not myGUID then return end
+    local record = A.LocalSave()
+    if not record then A.saveDirty = nil return end
+    local ok, why = A.WriteSave(myGUID, record)
+    if ok then
+        A.saveDirty = nil
+        Debug(SENT .. " your pledge (" .. (record.level > 0 and ("since level " .. record.level) or "not sworn")
+            .. ", save #" .. record.n .. ") to the " .. A.SAVE_NAME .. " macro.", true)
+    elseif why ~= "combat" then
+        A.saveDirty = nil
+        if not A.saveWarned then
+            A.saveWarned = true
+            Print(why == "full" and ("No free character macro slot for the " .. A.SAVE_NAME
+                .. " macro, so your pledge won't follow you to other computers.")
+                or "Couldn't save your pledge to a macro on this client; it stays on this computer only.")
+        end
+    end
+end
+-- At login, once macros are loaded: settle the record, then ask for /played
+-- (assessing before this could compare against an out-of-date copy).
+function A.SyncSave()
+    if not myGUID or A.saveSynced then return end
+    A.saveSynced = true
+    local saved, why = A.ReadSave(myGUID)
+    local mine = char.saveSeq or 0
+    if saved and saved.n > mine then
+        -- Newer than this computer's copy: another computer played since.
+        char.saveSeq = saved.n
+        if saved.level == 0 then
+            if char.sworn then
+                idle.ResetGrace()
+                DisarmReflag()
+                Print("Your " .. A.SAVE_NAME .. " macro says your oath was broken on another computer, so it's broken here too.")
+            end
+            char.sworn, char.pledgedSinceLevel, char.joining, char.verify = false, nil, nil, nil
+        else
+            local before = char.sworn and char.pledgedSinceLevel
+            char.sworn, char.pledgedSinceLevel, char.joining, char.declined = true, saved.level, nil, nil
+            -- since = seen = 0: sworn before /played was known; verification
+            -- starts at the next /played.
+            char.verify = (saved.since > 0 or saved.seen > 0)
+                and {since = saved.since, seen = saved.seen, untracked = saved.untracked} or nil
+            if before ~= saved.level then
+                Print("Restored your oath from the " .. A.SAVE_NAME .. " macro: pledged since level " .. saved.level .. ".")
+            end
+        end
+        UpdatePrompt()
+        Announce(true)
+        Refresh()
+    else
+        if why == "altered" then
+            Print("The " .. A.SAVE_NAME .. " macro was edited, so it was ignored"
+                .. (char.sworn ~= nil and " and rewritten from this computer." or "."))
+        end
+        -- Missing, edited, older or the same: this computer's copy stands.
+        if char.sworn ~= nil and (not saved or mine > saved.n) then A.MarkSave() end
+    end
+    A.RequestPlayed()
 end
 
 ---------------------------------------------------------------------------
@@ -1496,6 +1642,9 @@ local function OnTooltip(tooltip)
     if Status(unit) then TooltipLines(tooltip, unit) end
 end
 local function TickWork(now)
+    A.TrackPlayed()
+    if A.saveSynced and char.sworn and char.verify and now - (A.savedAt or 0) >= A.SAVE_EVERY then A.MarkSave() end
+    if A.saveDirty then A.FlushSave() end
     for guid, peer in pairs(peers) do
         if now - peer.seen >= A.TTL then peers[guid] = nil end
     end
@@ -1525,6 +1674,13 @@ local function PrintStatus()
         local level = A.PledgeLevel(char)
         Print("You're sworn" .. (level and (" since level " .. level) or "") .. ". Flag: "
             .. (Desired() and "on" or "|cffff4444off|r") .. ".")
+        local record, played = char.verify, A.PlayedNow()
+        if record and played then
+            Print("|cff55ff55Verified|r: HonorBound has missed "
+                .. A.Duration(record.untracked) .. " of your play since the pledge (" .. A.Duration(A.VerifyAllowance(record, played)) .. " allowed).")
+        else
+            Print("Verification: waiting for your play time from the server.")
+        end
     else
         Print("You haven't sworn on this character. Type /honor swear.")
     end
@@ -1680,7 +1836,7 @@ end
 -- and a /reload can land you in combat before PLAYER_LOGIN.
 prompt = CreatePrompt()
 
-for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT"}) do
+for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT", "TIME_PLAYED_MSG", "UPDATE_MACROS"}) do
     eventFrame:RegisterEvent(event)
 end
 -- Speakers we might not know yet. Group and guild chat are covered by
@@ -1739,6 +1895,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         A.optionsCategory = built and category or nil
         if not built then Print("Couldn't build the settings page (" .. tostring(category) .. "). The /honor commands still work.") end
         C_Timer.NewTicker(1, Tick)
+        -- Read the save once the game says macros are loaded (UPDATE_MACROS),
+        -- or after 10 s if that already happened; /played is asked for then.
+        C_Timer.After(10, A.SyncSave)
         UpdatePrompt()
         Refresh()
         if char.sworn then
@@ -1750,6 +1909,12 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         return
     elseif event == "PLAYER_LOGOUT" then
         if char.sworn and deadline then char.graceLeft = math.max(0, deadline - GetTime()) end
+        A.TrackPlayed()
+        if A.saveSynced and char.sworn ~= nil then A.MarkSave() A.FlushSave() end
+    elseif event == "TIME_PLAYED_MSG" then
+        A.OnPlayed(...)
+    elseif event == "UPDATE_MACROS" then
+        A.SyncSave()
     elseif idle.events[event] then
         local unit = ...
         if not event:find("^UNIT_") or unit == "player" then idle.Note() end

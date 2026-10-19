@@ -75,6 +75,50 @@ coverage line every 15 s, so you can watch a crowd fill in at real speed.
 - `/honor sim off` removes simulated crests and keeps everything learned for
   real. `/honor sim` prints the coverage line.
 
+## Pledge verification (`Verify.lua`)
+
+Was HonorBound running for all the play since the pledge? `/played` is
+counted by the server and keeps going while the addon is off, so disabling
+it, unflagging, reflagging and re-enabling still leaves a gap.
+
+- Record: `since` (/played at the pledge), `seen` (/played as last recorded
+  by the addon, kept current every second from the login /played plus
+  session time), `untracked`.
+- After login, once the save macro is read, the addon asks for /played (its
+  own request isn't printed in chat). Gap = /played now − `seen`. Gaps of
+  2 min or less are ignored; others add to `untracked`. Only the first
+  /played of a session is assessed.
+- Allowed: the larger of 2 h or 2% of the play since the pledge. Going over
+  **breaks the oath**; a new oath starts a fresh record.
+- Oaths from before this version start verification on first login.
+
+## Saved pledge (`Save.lua`)
+
+The record is kept in a character macro, `HonorBound Save`, because macros
+are stored on Blizzard's servers and addon data isn't:
+
+```
+#HonorBound save data. Do not edit or delete this macro: a changed line is ignored and your pledge may be lost.
+#HB3 l=12;s=40210;p=183342;u=95;n=41;h=4ACF1B72A61A7A37
+```
+
+- `l` level (0 = not sworn: a break is saved too, the macro is never
+  deleted), `s` since, `p` seen, `u` untracked, `n` write counter, `h` a
+  hash of all of it plus the character's GUID (hashed twice, so a one-second
+  change scrambles it). Hand edits and macros copied to another character are
+  rejected; the formula ships with the addon, so this stops casual edits, not
+  a determined cheater, and an old copy of the line stays valid.
+- Written on swear, break and a counted gap, every 5 min while sworn, and at
+  logout; never in combat (it waits). Each write bumps the counter.
+- At login, once macros are loaded (`UPDATE_MACROS`, or 10 s after login):
+  the higher counter wins. The macro's means another computer played since,
+  so its record is adopted (its session isn't a gap); this computer's means a
+  change here never reached the macro (e.g. a break in combat, then a
+  reload), so it's written now. An edited macro is ignored and rewritten; a
+  missing one is recreated. No free character macro slot: a one-time note,
+  local data only.
+- A crash loses up to 5 minutes of `seen` to the gap; the allowance covers it.
+
 ## Development and validation
 
 The distributable addon is in `HonorBound/`; the vector artwork is in
