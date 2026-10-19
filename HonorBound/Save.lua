@@ -32,7 +32,6 @@ local function Fields(r)
     return ("l=%d;s=%d;p=%d;u=%d;n=%d"):format(r.level, math.floor(r.since), math.floor(r.seen),
         math.floor(r.untracked), r.n)
 end
-A.SaveSeal = Seal
 
 -- record: {level, since, seen, untracked, n}
 function A.EncodeSave(guid, record)
