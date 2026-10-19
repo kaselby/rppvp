@@ -22,7 +22,7 @@ local db, char, myGUID, myServer, lastAnnounce, lastPayload, lastPledgePayload
 local announceRetryAt = 0
 local peers, widgets, plates = {}, {}, {}
 local lastAnswer, lastMinute = -100, 0
-local guarded, deadline, prompt, promptAfterCombat
+local guarded, countLeft, countedAt, prompt, promptAfterCombat
 local Refresh, Announce, UpdatePrompt, RefreshPlate
 
 local function Print(text)
@@ -971,10 +971,9 @@ local function DisarmReflag()
     reflagArmed = false
     Debug("Reflag keys released.")
 end
--- A fresh grace period: no deadline yet, nothing carried over, and no
--- pause left from an earlier one.
+-- A fresh grace period: no countdown yet and nothing carried over.
 function idle.ResetGrace()
-    deadline, char.graceLeft, idle.frozen = nil, nil, nil
+    countLeft, countedAt, char.graceLeft = nil, nil, nil
 end
 local function Swear()
     A.StartPledge(char, UnitLevel("player"))
@@ -1339,7 +1338,7 @@ local function SetPromptShown(show)
     prompt:SetShown(show)
 end
 -- Decides whether the prompt is up and what it says, and enforces the
--- grace deadline. Runs every second and on flag changes.
+-- grace countdown. Runs every second and on flag changes.
 UpdatePrompt = function()
     if not char or not prompt then return end
     prompt.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
@@ -1390,19 +1389,20 @@ UpdatePrompt = function()
         -- Our own countdown, even while the game's PvP timer runs after a
         -- typed /pvp: only ours pauses while you're away.
         -- Logged in unflagged: grace left from an earlier session carries over.
-        if not deadline then
-            deadline = GetTime() + (char.graceLeft or A.GRACE)
+        -- Counted, not timed: each check takes off the time since the last
+        -- one, at most 2 s, and only the part before you went away. Time
+        -- with no checks at all (a loading screen, a frozen client) costs
+        -- nothing, so it can't break the oath on the next check.
+        local now = GetTime()
+        if not countLeft then
+            countLeft, countedAt = char.graceLeft or A.GRACE, now
             idle.Wait()
         end
         idle.Poll()
-        if idle.Away() then
-            -- Away: hold the countdown where it was.
-            idle.frozen = idle.frozen or math.max(0, deadline - GetTime())
-            deadline = GetTime() + idle.frozen
-        else
-            idle.frozen = nil
-        end
-        left = deadline - GetTime()
+        local step = math.min(now - countedAt, 2)
+        countLeft = countLeft - math.max(0, math.min(step, idle.last + idle.after - countedAt))
+        countedAt = now
+        left = countLeft
         if left <= 0 then Break("you stayed unflagged too long") DisarmReflag() SetPromptShown(false) return end
         -- Try the borrowed keys first; the popup follows if they go unused.
         if ArmReflag() then
@@ -1421,7 +1421,7 @@ UpdatePrompt = function()
             .. (reflagArmed and "Press an action bar key, click a bar button, or click below" or "Click below")
             .. " within " .. FormatTime(left) .. ", or your oath breaks and your crest goes."
             .. (idle.waiting and " (The countdown starts when you move.)"
-                or idle.frozen and " (Paused while you're away.)" or ""))
+                or idle.Away() and " (Paused while you're away.)" or ""))
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
     else
@@ -2069,7 +2069,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif not db then
         return
     elseif event == "PLAYER_LOGOUT" then
-        if char.sworn and deadline then char.graceLeft = math.max(0, deadline - GetTime()) end
+        if char.sworn and countLeft then char.graceLeft = math.max(0, countLeft) end
         A.TrackPlayed()
         if A.saveSynced and char.sworn ~= nil then A.MarkSave() A.FlushSave() end
     elseif event == "TIME_PLAYED_MSG" then

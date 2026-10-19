@@ -894,6 +894,22 @@ check(HonorBoundCharDB.sworn, "active again: the countdown resumes from where it
 advance(20)
 check(not HonorBoundCharDB.sworn, "and breaks the oath once the rest runs out")
 moving = true
+-- Time with no checks at all (a long loading screen after clicking a
+-- hearthstone in your bags) isn't charged: 2:00 left, then 2.5 minutes
+-- with no ticks, and the oath holds with the time it had.
+HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
+setFlag(true)
+moving = true
+setFlag(false)
+advance(A.GRACE - 120)
+moving = false
+now = now + 150 -- the loading screen: the clock moves, nothing runs
+advance(1)
+check(HonorBoundCharDB.sworn, "a long gap with no checks doesn't break the oath")
+local afterGap = prompt.text.text:match("within (%d+):(%d+)")
+check(afterGap and tonumber(afterGap) == 1, "and costs at most a couple of seconds")
+moving = true
+setFlag(true)
 -- Casting counts as activity even standing still.
 HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
 setFlag(true)
