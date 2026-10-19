@@ -11,7 +11,7 @@ assert(targetBadge().shown, "heard over party: crest")
 local saved = HonorBoundDB.likely[mate]
 assert(saved and saved.sworn and saved.level == 14 and saved.name == "Mate-Surname", "and remembered, with a whisperable name")
 local unsworn = "Player-70-AAA556"
-event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(unsworn, false), "CHANNEL", "Plain-Home")
+event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(unsworn, false), "GUILD", "Plain-Home")
 assert(HonorBoundDB.likely[unsworn] == nil, "unsworn players aren't added")
 -- Relog: addon state is new, saved variables stay.
 A = {}

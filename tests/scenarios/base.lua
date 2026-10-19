@@ -96,8 +96,10 @@ function GetTime() return now end
 function UnitLevel() return 20 end
 function time() return 1000000 + now end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
-function IsInGuild() return false end
-local lockdown, players, systemFilters, channelResult = false, {}, {}, nil
+-- A guild member: status updates go to the guild now that there is no channel.
+local inGuild = true
+function IsInGuild() return inGuild end
+local lockdown, players, systemFilters, channelResult, whisperResult = false, {}, {}, nil, nil
 function UnitIsPlayer(unit) return units[unit] ~= nil end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
 function GetPlayerInfoByGUID(guid)
@@ -123,7 +125,9 @@ C_ChatInfo = {
     InChatMessagingLockdown = function() return lockdown end,
     SendAddonMessage = function(_, message, route, target)
         sent[#sent + 1] = {message = message, route = route, target = target}
-        return (route == "CHANNEL" and channelResult) or 0
+        -- channelResult refuses status routes (group/guild); whisperResult refuses whispers.
+        if route == "WHISPER" then return whisperResult or 0 end
+        return channelResult or 0
     end,
 }
 C_Timer = {
@@ -159,7 +163,7 @@ local function lastSent()
 end
 local playerBadge = function() return PlayerFrame.HonorBoundWidget end
 local targetBadge = function() return TargetFrame.HonorBoundWidget end
-local function peer(sworn) event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, sworn), "CHANNEL", "Surname-bearing Name") end
+local function peer(sworn) event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, sworn), "GUILD", "Surname-bearing Name") end
 
 local overrides, instance = {}, false
 local keyActions = {["1"] = "ACTIONBUTTON1", ["2"] = "ACTIONBUTTON2", ["SHIFT-Q"] = "ACTIONBUTTON2",

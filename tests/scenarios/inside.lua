@@ -17,7 +17,7 @@ advance(149) party(A.Encode(mate, true)) event("PLAYER_TARGET_CHANGED")
 assert(targetBadge().shown, "the word holds a while")
 advance(2) party(A.Encode(mate, true)) event("PLAYER_TARGET_CHANGED")
 assert(not targetBadge().shown, "and lapses without a fresh one")
-event("CHAT_MSG_ADDON", A.PREFIX, A.EncodeInside(mate, true), "CHANNEL", "Mate-Home")
+event("CHAT_MSG_ADDON", A.PREFIX, A.EncodeInside(mate, true), "GUILD", "Mate-Home")
 event("PLAYER_TARGET_CHANGED")
 assert(not targetBadge().shown, "only a group member's word counts")
 assert(A.DecodeInside(A.Encode(mate, true)) == nil and A.Decode(A.EncodeInside(mate, true)) == nil
