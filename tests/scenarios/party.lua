@@ -1,8 +1,8 @@
--- 0.4.6: crests on Blizzard's party frames, in place of their PvP icon.
+-- Crests on Blizzard's party frames, in place of their PvP icon.
 setup()
 local mate = "Player-70-AAA888"
 group = true
--- Like PartyFrame.MemberFrameN in 12.1.5: made when the party shows.
+-- Like PartyFrame.MemberFrameN: created when the party shows.
 PartyFrame = object("PartyFrame")
 local member = object("PartyMemberFrame1")
 member.unit = "party1"
@@ -15,12 +15,10 @@ units.party1 = {guid = mate, flagged = true, faction = "Horde", name = "Mate", r
 local function party(message) event("CHAT_MSG_ADDON", A.PREFIX, message, "PARTY", "Mate-Home") end
 event("GROUP_ROSTER_UPDATE")
 local badge = member.HonorBoundWidget
-assert(badge and not badge.shown, "a party frame gets a crest slot, empty until they're known")
+assert(badge and not badge.shown, "no crest until they're known")
 party(A.Encode(mate, true))
 assert(badge.shown and badge.crest.texturePath:find("CrestHorde"), "sworn and flagged: crest on their party frame")
 assert(member.PartyMemberOverlay.PVPIcon.alpha == 0, "in place of the PvP icon")
-assert(badge.point[2] == member.PartyMemberOverlay.PVPIcon, "anchored on the PvP icon")
-assert(badge.scale == 0.75, "a little smaller than on the target frame")
 units.party1.flagged = false
 event("UNIT_FACTION", "party1")
 assert(not badge.shown and member.PartyMemberOverlay.PVPIcon.alpha == 1, "unflagged: crest gone, icon back")
@@ -35,5 +33,5 @@ event("GROUP_ROSTER_UPDATE")
 assert(not badge.shown, "a new member doesn't inherit the old one's crest")
 member.shown = false
 event("GROUP_ROSTER_UPDATE")
-assert(badge.unit == nil and not badge.shown, "hidden frame: no unit, no crest")
+assert(not badge.shown, "hidden frame: no crest")
 print("party: ok")

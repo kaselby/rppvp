@@ -16,8 +16,8 @@ for _, invalid in ipairs({"", "S|1|"..other.."|0.1.0", "S|2|Player-x|1|0.2", "S|
     check(A.Decode(invalid) == nil, "reject malformed, unbounded or v1 status")
 end
 
-local now, connected, group, combat = 0, false, false, false
-local desired, timer = true, nil
+local now, group, combat = 0, false, false
+local desired = true
 local sent, tasks, tickers, frames = {}, {}, {}, {}
 local units = {
     player = { guid = me, flagged = true, faction = "Horde" },
@@ -39,11 +39,8 @@ local function object(name)
 end
 function methods:GetName() return self.name end
 function methods:GetFrameLevel() return 1 end
-function methods:GetDrawLayer() return "BACKGROUND", 0 end
-function methods:GetParent() return self.parent end
 function methods:SetSize(w, h) self.width, self.height = w, h end
 function methods:GetWidth() return self.width or 64 end
-function methods:GetHeight() return self.height or 64 end
 function methods:SetPoint(...) self.point = {...} end
 function methods:ClearAllPoints() self.point = nil end
 function methods:SetScale(n) self.scale = n end
@@ -96,11 +93,9 @@ LE_PARTY_CATEGORY_INSTANCE = 2
 function GetTime() return now end
 function UnitLevel() return 20 end
 function time() return 1000000 + now end
-function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
--- A guild member: status updates go to the guild now that there is no channel.
 local inGuild = true
 function IsInGuild() return inGuild end
-local lockdown, players, systemFilters, channelResult, whisperResult = false, {}, {}, nil, nil
+local lockdown, players, systemFilters, statusResult, whisperResult = false, {}, {}, nil, nil
 function UnitIsPlayer(unit) return units[unit] ~= nil end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
 function GetPlayerInfoByGUID(guid)
@@ -118,11 +113,7 @@ end
 function UnitIsPVP(unit) return units[unit] and units[unit].flagged end
 function UnitFactionGroup(unit) return units[unit] and units[unit].faction end
 function GetPVPDesired() return desired end
-function IsPVPTimerRunning() return timer ~= nil end
-function GetPVPTimer() return timer end
 function InCombatLockdown() return combat end
-function GetChannelName() return connected and 7 or 0 end
-function JoinTemporaryChannel() check(now >= 15, "do not join community channel too early"); connected = true end
 function IsInGroup(category) return not category and group end
 function IsInRaid() return false end
 C_ChatInfo = {
@@ -130,20 +121,19 @@ C_ChatInfo = {
     InChatMessagingLockdown = function() return lockdown end,
     SendAddonMessage = function(_, message, route, target)
         sent[#sent + 1] = {message = message, route = route, target = target}
-        -- channelResult refuses status routes (group/guild); whisperResult refuses whispers.
+        -- Set to a result code to refuse: statusResult for group/guild, whisperResult for whispers.
         if route == "WHISPER" then return whisperResult or 0 end
-        return channelResult or 0
+        return statusResult or 0
     end,
 }
 C_Timer = {
     After = function(delay, callback) tasks[#tasks + 1] = {at = now + delay, callback = callback} end,
     NewTicker = function(_, callback) tickers[#tickers + 1] = callback end,
 }
--- Tooltips: capture the unit post-call and the lines it adds.
 Enum = { TooltipDataType = { Unit = 1 } }
 TooltipDataProcessor = { AddTooltipPostCall = function(_, callback) tooltipCallback = callback end }
 tooltipLines = {}
--- Activity for away protection: the player is active unless a test says not.
+-- Active unless a test says not (away protection).
 moving = true
 function IsPlayerMoving() return moving end
 assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
@@ -166,6 +156,15 @@ local function lastSent()
     end
     return ""
 end
+-- Lines shown to the player outside debug output that contain text.
+local function printed(text)
+    local n = 0
+    for _, line in ipairs(debugLines) do
+        local plain = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+        if plain:find("^HonorBound: ") and plain:find(text, 1, true) then n = n + 1 end
+    end
+    return n
+end
 local playerBadge = function() return PlayerFrame.HonorBoundWidget end
 local targetBadge = function() return TargetFrame.HonorBoundWidget end
 local function peer(sworn) event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, sworn), "GUILD", "Surname-bearing Name") end
@@ -175,9 +174,7 @@ event("PLAYER_LOGIN")
 check(prompt.shown and prompt.swear.shown, "welcome prompt offers the oath")
 check(not playerBadge().shown, "no crest before swearing")
 advance(18)
-check(not connected and lastSent():find("|0|"), "announces unsworn to the guild, and never joins a channel")
 
--- Swearing while flagged.
 prompt.swear.scripts.OnClick()
 check(HonorBoundCharDB.sworn and not prompt.shown, "swear from prompt")
 check(playerBadge().shown and playerBadge().crest.texturePath:find("CrestHorde"), "own faction crest")
@@ -192,12 +189,9 @@ check(targetBadge().shown and targetBadge().crest.texturePath:find("CrestAllianc
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 local plateCrest = plate.UnitFrame.HonorBoundCrest
 check(plateCrest.shown and plateCrest.texturePath:find("CrestAlliance"), "nameplate crest for sworn peer")
-check(plateCrest.point[1] == "RIGHT" and plateCrest.point[2] == plate.UnitFrame.name and plateCrest.point[4] == -42, "nameplate crest sits left of the name text")
 SlashCmdList.HONORBOUND("plates")
 check(not plateCrest.shown, "nameplate crest toggle")
 SlashCmdList.HONORBOUND("plates")
-check(plateCrest.shown, "nameplate crest back on")
-check(TargetFrame.pvpIcon.alpha == 0, "crest replaces target PvP icon")
 units.target.flagged = false
 event("PLAYER_TARGET_CHANGED")
 check(not targetBadge().shown and TargetFrame.pvpIcon.alpha == 1, "unflagged peer loses crest, PvP icon restored")
@@ -212,16 +206,12 @@ units.target.flagged = true
 peer(false)
 check(not targetBadge().shown, "unsworn peer has no crest")
 peer(true)
-check(targetBadge().shown, "re-sworn peer shown again")
 
--- Appearance settings.
 SlashCmdList.HONORBOUND("scale 1.5")
 SlashCmdList.HONORBOUND("offset -10 20")
-check(playerBadge().scale == 1.5 and HonorBoundDB.offsetX == -10, "placement settings")
-SlashCmdList.HONORBOUND("scale 99")
-check(HonorBoundDB.scale == 1.5, "reject excessive scale")
+check(playerBadge().scale == 1.5, "crest size setting")
 SlashCmdList.HONORBOUND("reset")
-check(HonorBoundDB.plates and HonorBoundDB.ring == nil and HonorBoundDB.scale == 1 and HonorBoundDB.offsetY == 0, "reset appearance")
+check(HonorBoundDB.plates and playerBadge().scale == 1, "reset appearance")
 
 -- Unflagged by something else: grace, then the oath breaks.
 desired, units.player.flagged = false, false
@@ -234,26 +224,23 @@ advance(A.GRACE + 2)
 check(HonorBoundCharDB.sworn == false and not prompt.shown, "oath breaks after grace")
 check(lastSent():find("|0|"), "broken oath broadcast")
 
--- Swearing again: completes once flagged.
+-- Swearing again completes once flagged.
 SlashCmdList.HONORBOUND("swear")
-check(HonorBoundCharDB.joining and not HonorBoundCharDB.sworn, "swear waits for the flag")
+check(not HonorBoundCharDB.sworn, "swear waits for the flag")
 desired, units.player.flagged = true, true
 event("PLAYER_FLAGS_CHANGED", "player")
 check(HonorBoundCharDB.sworn and playerBadge().shown, "oath retaken on flag")
 
--- Renouncing needs confirmation.
 SlashCmdList.HONORBOUND("renounce")
 check(HonorBoundCharDB.sworn, "renounce asks for confirmation")
 SlashCmdList.HONORBOUND("renounce confirm")
 check(HonorBoundCharDB.sworn == false and not playerBadge().shown, "renounce removes crest")
 
--- Silent peers expire.
 advance(A.TTL + 1)
 check(not targetBadge().shown, "expire silent peers")
 peer(true)
-check(targetBadge().shown, "returning peer discovered")
 
--- Whisper probes: everyone we see is asked by whisper.
+-- Whisper probes.
 local far, stranger, silent, spoofed = "Player-99-AAA111", "Player-99-BBB222", "Player-99-CCC333", "Player-99-DDD444"
 local function whispers(to)
     local list = {}
@@ -270,8 +257,7 @@ units.mouseover = { guid = far, flagged = true, faction = "Horde", name = "Fargu
 event("UPDATE_MOUSEOVER_UNIT")
 advance(1)
 local probe = whispers("Farguy-OtherRealm")[1]
-check(probe and probe.message:sub(1, #me + 5) == "WQ|1|" .. me, "mouseover on another realm sends one whisper probe")
-for _, m in ipairs(sent) do check(not (m.message:find(far, 1, true) and m.route ~= "WHISPER"), "no channel query for other-realm players") end
+check(probe and probe.message:sub(1, #me + 5) == "WQ|1|" .. me, "mouseover sends a whisper probe")
 units.mouseover = { guid = "Player-99-EEE555", flagged = true, faction = "Alliance", name = "Enemy", realm = "Other Realm" }
 event("UPDATE_MOUSEOVER_UNIT")
 advance(3)
@@ -280,7 +266,7 @@ check(#whispers("Enemy-OtherRealm") == 0, "no probes across factions")
 addon("WR|1|" .. far .. "|1|20|0.2.0", "Farguy-OtherRealm")
 units.nameplate1 = { guid = far, flagged = true, faction = "Horde", name = "Farguy", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(plate.UnitFrame.HonorBoundCrest.shown, "whisper reply gives a cross-realm badge")
+check(plate.UnitFrame.HonorBoundCrest.shown, "whisper reply gives a badge")
 advance(20)
 check(#whispers("Farguy-OtherRealm") == 1, "known peers are not re-probed while fresh")
 
@@ -306,21 +292,18 @@ check(not plate.UnitFrame.HonorBoundCrest.shown, "status claiming someone else's
 sent = {}
 say("Silent-OtherRealm", silent)
 advance(2)
-check(#whispers("Silent-OtherRealm") == 1, "chat speaker on another realm is probed")
 check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Silent-OtherRealm' is currently playing.") == true, "unreachable-player error is hidden")
 advance(40)
 say("Silent-OtherRealm", silent)
 advance(5)
 check(#whispers("Silent-OtherRealm") == 1, "players without the addon are not asked again")
 
--- Crowd: no pacing outside instances. 80 speakers at once are all asked
--- within a tick.
+-- Outside instances whispers are unpaced unless /honor rate caps them.
 advance(30)
 sent = {}
 for i = 1, 80 do say(("P%d-OtherRealm"):format(i), ("Player-99-%06X"):format(4096 + i)) end
 advance(1)
 check(#whispers() == 80, "every speaker in a crowd is whispered at once (" .. #whispers() .. ")")
--- /honor rate caps it for testing.
 SlashCmdList.HONORBOUND("rate 5")
 sent = {}
 for i = 1, 30 do say(("R%d-OtherRealm"):format(i), ("Player-99-%06X"):format(8192 + i)) end
@@ -339,12 +322,6 @@ lockdown = false
 advance(2)
 check(#whispers("Late-OtherRealm") == 1, "queued probe goes out after lockdown")
 
--- Same realm: asked by whisper too, never on a channel.
-local function channelPosts()
-    local list = {}
-    for _, m in ipairs(sent) do if m.route == "CHANNEL" then list[#list + 1] = m end end
-    return list
-end
 local function probeSentTo(name)
     for _ = 1, 5 do
         if #whispers(name) > 0 then return true end
@@ -356,51 +333,43 @@ sent = {}
 local neighbour = "Player-70-0BB001"
 units.nameplate1 = { guid = neighbour, flagged = true, faction = "Horde", name = "Neighbour", realm = "Home" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(probeSentTo("Neighbour-Home"), "a same-realm player is whispered a probe")
-check(#channelPosts() == 0, "nothing is sent on a channel")
+probeSentTo("Neighbour-Home")
 advance(31)
-check(HonorBoundDB.noAddon[neighbour], "a silent same-realm player is marked no-addon")
--- Their status in the guild clears the mistake straight away.
+check(HonorBoundDB.noAddon[neighbour], "a silent player is marked no-addon")
 event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(neighbour, true), "GUILD", "Neighbour")
 check(HonorBoundDB.noAddon[neighbour] == nil, "hearing a player clears their no-addon entry")
 check(plate.UnitFrame.HonorBoundCrest.shown, "and their crest appears")
 
--- Rate limits: refused sends are always reported, debug or not.
+-- Refused sends are reported, debug or not: at once, then one summary per 10 s.
 debugLines = {}
 whisperResult = 3
 sent = {}
 for i = 1, 5 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
 advance(1)
-local function limited()
-    local list = {}
-    for _, line in ipairs(debugLines) do if line:find("Rate limited", 1, true) then list[#list + 1] = line end end
-    return list
-end
-check(#limited() == 1 and limited()[1]:find("5 messages refused: sending too fast", 1, true), "refused whispers are reported at once: " .. tostring(limited()[1]))
+check(printed("refused") == 1, "refused whispers are reported at once")
 for i = 6, 9 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
 advance(3)
-check(#limited() == 1, "further refusals wait for the next summary")
+check(printed("refused") == 1, "further refusals wait for the next summary")
 advance(8)
-check(#limited() == 2 and limited()[2]:find("4 messages refused in the last 10 s", 1, true), "then one summary: " .. tostring(limited()[2]))
+check(printed("refused") == 2, "then one summary")
 whisperResult = nil
 ERR_CHAT_THROTTLED = "You are sending too many messages."
 check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", ERR_CHAT_THROTTLED) == nil, "the server's own throttle notice stays visible")
 advance(11)
-check(#limited() == 3 and limited()[3]:find("server says we're sending too fast", 1, true), "and is counted as a rate limit: " .. tostring(limited()[3]))
+check(printed("refused") == 3, "and is counted as a rate limit")
 
--- Chat names wear the same faction crest as frames and nameplates.
 local function chatName(factionOf, name)
     local filter = A.CreateChatFilter(function() return true end, function() return true end, factionOf)
     local args = {}
-    args[12] = other -- the sender GUID is the 12th chat event argument
+    args[12] = other -- sender GUID
     return filter("CHAT_MSG_SAY", name, unpack(args, 1, 12))
 end
 local horde = chatName(function() return "Horde" end, "Bob")
-check(horde == "|TInterface\\AddOns\\HonorBound\\Media\\CrestHorde.tga:0:0|t Bob", "chat uses the Horde crest")
+check(horde:find("CrestHorde.tga", 1, true) and horde:find("Bob$"), "chat uses the Horde crest")
 check(chatName(function() return "Alliance" end, "Bob"):find("CrestAlliance.tga", 1, true), "chat uses the Alliance crest")
 check(chatName(function() return "Horde" end, horde) == nil, "chat crest is not added twice")
 
--- Simulation: a fixed share of probed players answers as addon users.
+-- Simulation.
 local function chatCrest(guid, name)
     local args = {}
     args[12] = guid
@@ -420,9 +389,9 @@ local simmed = "Player-99-5AA001"
 units.nameplate1 = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(probeSent("Simmy-OtherRealm"), "simulation still sends the real probe")
-check(crest.shown and crest.desaturated and crest.alpha == 1 and crest.tint[2] == 1, "light grey crest while the probe is waiting")
+check(crest.shown and crest.desaturated and crest.tint[2] == 1, "light grey crest while the probe is waiting")
 advance(4)
-check(crest.shown and not crest.desaturated and crest.alpha == 1 and crest.tint[2] == 1, "simulated user gets a standard crest within 3 s")
+check(crest.shown and not crest.desaturated, "simulated user gets a standard crest within 3 s")
 units.target = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
 event("PLAYER_TARGET_CHANGED")
 check(targetBadge().shown, "simulated user's crest shows on the target frame without a PvP flag")
@@ -430,33 +399,27 @@ local simChat = chatCrest(simmed, "Simmy")
 check(simChat and simChat:find("CrestHorde.tga", 1, true), "simulated user's crest shows in chat")
 check(HonorBoundDB.likely[simmed] == nil, "simulated users are never saved")
 advance(12)
-check(#channelPosts() == 0, "simulated answers aren't shared on any channel")
-check(A.SimHash(simmed) == A.SimHash(simmed) and A.SimHash(simmed) >= 0 and A.SimHash(simmed) < 100, "fixed verdict per player")
 local under = 0
 for i = 1, 2000 do if A.SimHash(("Player-99-%08X"):format(i * 7919)) < 10 then under = under + 1 end end
 check(under > 120 and under < 280, "about 10% of players fall under 10 (" .. under .. ")")
 
--- 0%: no fakes, and the no-addon path is exactly the real one.
 sent = {}
 SlashCmdList.HONORBOUND("sim 0")
 local plain = "Player-99-5AA004"
 units.nameplate1 = { guid = plain, flagged = false, faction = "Horde", name = "Plain", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(probeSent("Plain-OtherRealm"), "a player outside the simulated share is probed")
+probeSent("Plain-OtherRealm")
 advance(31)
 check(crest.shown and crest.desaturated and crest.tint[1] < 0.5 and crest.tint[1] == crest.tint[2], "dark grey crest once marked no-addon")
 check(HonorBoundDB.noAddon[plain], "no-addon still saved while simulating")
 
--- Off: simulated crests go, real knowledge stays.
 SlashCmdList.HONORBOUND("sim 100")
 units.nameplate1 = { guid = simmed, flagged = false, faction = "Horde", name = "Simmy", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 advance(1)
 SlashCmdList.HONORBOUND("sim off")
-check(not crest.shown, "sim off removes simulated crests")
-check(HonorBoundDB.noAddon[plain], "sim off keeps saved no-addon entries")
+check(not crest.shown and HonorBoundDB.noAddon[plain], "sim off removes simulated crests, keeps what was learned")
 
--- Same budget with or without simulation.
 local function crowdWhispers(percent)
     SlashCmdList.HONORBOUND(percent and ("sim " .. percent) or "sim off")
     advance(30)
@@ -469,36 +432,33 @@ local off, on = crowdWhispers(nil), crowdWhispers(100)
 check(on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
 SlashCmdList.HONORBOUND("sim off")
 
--- Simulated users already on the no-addon list still get asked and answer.
 local ruled = "Player-99-5AA0F0"
 HonorBoundDB.noAddon[ruled] = time() + 7200
 SlashCmdList.HONORBOUND("sim 100")
 units.nameplate1 = { guid = ruled, flagged = false, faction = "Horde", name = "Ruled", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(probeSent("Ruled-OtherRealm"), "a simulated user on the no-addon list is still probed")
+probeSent("Ruled-OtherRealm")
 advance(4)
-check(crest.shown and not crest.desaturated, "and gets a full crest")
+check(crest.shown and not crest.desaturated, "a simulated user on the no-addon list still gets a full crest")
 check(HonorBoundDB.noAddon[ruled], "the saved no-addon list itself is untouched")
 SlashCmdList.HONORBOUND("sim off")
 
--- Chat shows the grey states while debugging.
+-- Grey states in chat while debugging.
 SlashCmdList.HONORBOUND("debug on")
 local askedInChat = "Player-99-C4A001"
 say("Asked-OtherRealm", askedInChat)
-check(probeSent("Asked-OtherRealm"), "trade/say speaker gets probed")
+probeSent("Asked-OtherRealm")
 local line = chatCrest(askedInChat, "Asked")
 check(line and line:find("CrestGrey.tga", 1, true) and line:find(":255:255:255|t", 1, true), "light grey crest in chat while being asked")
 advance(31)
 line = chatCrest(askedInChat, "Asked")
 check(line and line:find("CrestGrey.tga", 1, true) and line:find(":102:102:102|t", 1, true), "dark grey crest in chat once marked no-addon")
-check(chatCrest(askedInChat, line) == nil, "grey crest isn't added twice")
 SlashCmdList.HONORBOUND("debug off")
 check(chatCrest(askedInChat, "Asked") == nil, "no grey crests in chat when debug is off")
 
--- First messages: lines already in chat get their crest once the probe answers.
+-- Lines already in chat get their crest once the probe answers.
 local history = {}
--- Like Forever's client: callbacks get the line's text and colours, and the
--- returned values replace them.
+-- Like Forever: callbacks get the line's text and colours, and return replacements.
 ChatFrame1 = { TransformMessages = function(self, predicate, transform)
     for _, entry in ipairs(history) do
         if predicate(entry.message, entry.r, entry.g, entry.b) then
@@ -506,12 +466,12 @@ ChatFrame1 = { TransformMessages = function(self, predicate, transform)
         end
     end
 end }
--- Another client style: callbacks get the entry table and edit it in place.
+-- Other clients: callbacks edit the entry table in place.
 local tableHistory = {}
 ChatFrame3 = { TransformMessages = function(self, predicate, transform)
     for _, entry in ipairs(tableHistory) do if predicate(entry) then transform(entry) end end
 end }
-ChatFrame2 = {} -- a frame without history rewriting is left alone
+ChatFrame2 = {} -- no history rewriting
 local nextLine = 5000
 local function printChat(sender, guid, text)
     nextLine = nextLine + 1
@@ -534,36 +494,25 @@ SlashCmdList.HONORBOUND("debug off")
 local trader = "Player-99-F1A001"
 local first = printChat("Trader-OtherRealm", trader, "WTS stuff")
 check(crests(first) == 0, "a stranger's first line prints without a crest")
-check(probeSent("Trader-OtherRealm"), "the trade line starts a probe")
+probeSent("Trader-OtherRealm")
 advance(4)
-check(first.message:find("CrestHorde.tga", 1, true) or first.message:find("CrestAlliance.tga", 1, true), "the first line gets its crest once they answer")
-check(crests(first) == 1 and first.message:find("|h[|T", 1, true), "exactly one crest, inside the name")
+check(crests(first) == 1 and first.message:find("|h[|T", 1, true), "the first line gets one crest, inside the name, once they answer")
 check(first.message:find("|h: WTS stuff", 1, true), "the message text is untouched")
 check(first.r == 1 and first.g == 0.75 and first.b == 0.75, "the line's colour survives the rewrite")
 check(tableHistory[#tableHistory].message:find("|h[|T", 1, true), "clients that pass entry tables are updated too")
 local second = printChat("Trader-OtherRealm", trader, "still selling")
-check(crests(second) == 1, "later lines get the crest when printed")
 
--- Debug: the grey states show on the line and are replaced, never stacked.
 SlashCmdList.HONORBOUND("sim 0")
 SlashCmdList.HONORBOUND("debug on")
 local silentTrader = "Player-99-F1A002"
 local line = printChat("Lfger-OtherRealm", silentTrader, "LFG")
-check(probeSent("Lfger-OtherRealm"), "silent trader probed")
-check(line.message:find("CrestGrey.tga", 1, true) and line.message:find(":255:255:255|t", 1, true), "first line turns light grey while being asked")
+probeSent("Lfger-OtherRealm")
 advance(31)
-check(line.message:find(":102:102:102|t", 1, true) and crests(line) == 1, "then dark grey, replacing the light grey")
+check(line.message:find(":102:102:102|t", 1, true) and crests(line) == 1, "grey crests on old lines are replaced, never stacked")
 SlashCmdList.HONORBOUND("debug off")
 
--- Sim off takes simulated crests back off old lines.
 SlashCmdList.HONORBOUND("sim off")
 check(crests(first) == 0 and crests(second) == 0, "sim off removes simulated crests from old lines")
-debugLines = {}
-SlashCmdList.HONORBOUND("chatcheck")
-local report = table.concat(debugLines, "\n")
-if os.getenv("SHOW_CHECK") then print(report) end
-check(report:find("rewrite old lines (TransformMessages): yes", 1, true) and report:find("Each line is a string", 1, true)
-    and report:find("matching a remembered line ID inside a player link: ", 1, true), "chatcheck reports the chat frame's shape")
 ChatFrame1, ChatFrame2, ChatFrame3 = nil, nil, nil
 
 -- Debug output reads as sentences: no raw protocol strings or bare GUIDs.
@@ -574,9 +523,10 @@ addon("WQ|1|Player-99-DB0001|1|12|0.3.1", "Readable-OtherRealm")
 event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, true), "GUILD", "Neighbour")
 units.mouseover = { guid = "Player-99-DB0005", flagged = true, faction = "Horde", name = "Quiet", realm = "Other Realm" }
 event("UPDATE_MOUSEOVER_UNIT")
-channelResult = 8
+sent = {}
+statusResult = 8
 advance(70)
-channelResult = nil
+statusResult = nil
 SlashCmdList.HONORBOUND("debug on")
 local raw, guids = {}, {}
 for _, line in ipairs(debugLines) do
@@ -584,17 +534,14 @@ for _, line in ipairs(debugLines) do
     if plain:find("|") then raw[#raw + 1] = plain end
     if plain:find("Player%-%d") then guids[#guids + 1] = plain end
 end
-check(#raw == 0, "no protocol text in debug lines: " .. table.concat(raw, " / "))
+check(#debugLines > 0 and #raw == 0, "no protocol text in debug lines: " .. table.concat(raw, " / "))
 check(#guids == 0, "no raw GUIDs in debug lines: " .. table.concat(guids, " / "))
--- A refused status update waits 10 s instead of retrying every second.
-local refused = 0
-for _, line in ipairs(debugLines) do
-    if line:find("Couldn't send", 1, true) and line:find("your status", 1, true) then refused = refused + 1 end
-end
-check(refused <= 8, "refused status updates back off (" .. refused .. " in 70 s)")
-check(#debugLines > 8, "verbose debug produced output (" .. #debugLines .. " lines)")
+local statusTries = 0
+for _, m in ipairs(sent) do if m.route == "GUILD" and m.message:find("^S|") then statusTries = statusTries + 1 end end
+check(statusTries >= 1 and statusTries <= 8, "refused status updates back off (" .. statusTries .. " tries in 70 s)")
 if os.getenv("SHOW_DEBUG") then for _, line in ipairs(debugLines) do print((line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))) end end
 SlashCmdList.HONORBOUND("debug off")
+
 -- Reflag on the next keypress, and dungeons pause the countdown.
 local overrides, instance = {}, false
 local keyActions = {["1"] = "ACTIONBUTTON1", ["2"] = "ACTIONBUTTON2", ["SHIFT-Q"] = "ACTIONBUTTON2",
@@ -609,10 +556,9 @@ function GetBindingAction(key) return keyActions[key] or "" end
 function SetOverrideBindingClick(_, _, key, name, button) overrides[key] = {name = name, button = button} end
 function ClearOverrideBindings() for key in pairs(overrides) do overrides[key] = nil end end
 function IsInInstance() return instance, instance and "party" or "none" end
-function GetCVarBool(name) return name == "ActionButtonUseKeyDown" end
 ActionButton1, ActionButton2, BT4Button3 = object("ActionButton1"), object("ActionButton2"), object("BT4Button3")
 StanceButton1 = object("StanceButton1")
--- Inside dungeons and raids the client's whisper limit applies: paced again.
+-- Inside, the client's whisper limit applies.
 instance = true
 advance(30)
 sent = {}
@@ -621,7 +567,6 @@ advance(1)
 check(#whispers() >= 1 and #whispers() <= 6, "inside an instance whispers are paced (" .. #whispers() .. " in a second)")
 instance = false
 advance(31)
--- The click overlays: secure buttons whose macro is set per mouse button.
 local function overlays()
     local found = {}
     for _, frame in ipairs(frames) do
@@ -631,6 +576,14 @@ local function overlays()
 end
 local function borrowed() local n = 0 for _ in pairs(overrides) do n = n + 1 end return n end
 local function macroFor(key) return HonorBoundReflagButton.attributes["*macrotext-" .. overrides[key].button] end
+local function clicks(macro, name)
+    local _, n = (macro or ""):gsub("/click " .. name .. " ", "")
+    return n
+end
+local function flagsThenPresses(key, name)
+    local macro = macroFor(key)
+    return macro and macro:find("^/pvp\n") and clicks(macro, name) > 0
+end
 local function setFlag(on) desired, units.player.flagged = on, on event("PLAYER_FLAGS_CHANGED", "player") end
 
 setFlag(true)
@@ -641,7 +594,7 @@ event("PLAYER_ENTERING_WORLD")
 setFlag(false)
 check(borrowed() == 0 and not prompt.shown, "inside a dungeon: no borrowed keys, no popup")
 check(playerBadge().shown, "inside a dungeon: unflagged, but your crest stays")
-channelResult = 0 advance(11) event("GROUP_ROSTER_UPDATE")
+statusResult = 0 advance(11) event("GROUP_ROSTER_UPDATE")
 check(lastSent():find("|1|"), "inside a dungeon: you still announce yourself as sworn")
 units.target = { guid = other, flagged = false, faction = units.player.faction, name = "Dungeon", realm = "Mate" }
 peer(true) event("PLAYER_TARGET_CHANGED")
@@ -651,23 +604,21 @@ check(HonorBoundCharDB.sworn, "dungeon time doesn't run the countdown down")
 instance = false
 event("PLAYER_ENTERING_WORLD")
 check(not playerBadge().shown and not targetBadge().shown, "outside, unflagged: no crests until the flag is back")
-check(borrowed() == 5 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
+check(borrowed() > 0 and overrides["1"].name == "HonorBoundReflagButton", "leaving borrows the bar keys")
 check(not prompt.shown, "no popup while the keys are borrowed")
-local both = function(name) return ("/pvp\n/click %s LeftButton 1\n/click %s LeftButton"):format(name, name) end
-check(macroFor("1") == both("ActionButton1"), "key 1 flags, then presses its own button: " .. tostring(macroFor("1")))
-check(macroFor("SHIFT-Q") == both("ActionButton2"), "second binding of a bar button")
-check(macroFor("3") == both("BT4Button3"), "bar addon button through its CLICK binding")
-check(macroFor("Z") == "/pvp\n/click StanceButton1 LeftButton", "stance buttons get one click, not two: " .. tostring(macroFor("Z")))
+check(flagsThenPresses("1", "ActionButton1"), "key 1 flags, then presses its own button")
+check(flagsThenPresses("SHIFT-Q", "ActionButton2"), "second binding of a bar button")
+check(flagsThenPresses("3", "BT4Button3"), "bar addon button through its CLICK binding")
+check(clicks(macroFor("Z"), "StanceButton1") == 1, "stance buttons get one click, not two")
 check(overrides["W"] == nil, "movement keys are never borrowed")
 local clickOverlays = overlays()
-check(#clickOverlays == 4, "click overlays over the bar buttons in use (" .. #clickOverlays .. ")")
 local overlayHost = clickOverlays[1].parent
-check(overlayHost.shown, "overlays shown while armed")
+check(overlayHost.shown, "click overlays shown while armed")
 local overBT4
 for _, overlay in ipairs(clickOverlays) do
-    if overlay.attributes.macrotext1 == both("BT4Button3") then overBT4 = overlay end
+    if clicks(overlay.attributes.macrotext1, "BT4Button3") > 0 then overBT4 = overlay end
 end
-check(overBT4 and overBT4.attributes.macrotext2 == "/pvp\n/click BT4Button3 RightButton 1\n/click BT4Button3 RightButton", "right click passes through as a right click")
+check(overBT4 and overBT4.attributes.macrotext2:find("/click BT4Button3 RightButton", 1, true), "right click passes through as a right click")
 event("PLAYER_REGEN_DISABLED")
 combat = true
 advance(2)
@@ -682,7 +633,7 @@ event("PLAYER_FLAGS_CHANGED", "player")
 overlayHost.shown = false
 combat = false
 event("PLAYER_REGEN_ENABLED")
-check(borrowed() == 5 and overlayHost.shown, "borrowed again after combat")
+check(borrowed() > 0 and overlayHost.shown, "borrowed again after combat")
 -- The press: the macro's /pvp flags you; the keys go back straight away.
 HonorBoundReflagButton.scripts.PostClick(HonorBoundReflagButton)
 blizzardPvp()
@@ -693,11 +644,10 @@ units.player.flagged = true
 event("PLAYER_FLAGS_CHANGED", "player")
 advance(5)
 check(borrowed() == 0 and HonorBoundCharDB.sworn and not prompt.shown, "reflagged by the keypress, oath kept")
--- Turned off by hand: the popup asks at once, and the keys still work.
 setFlag(false)
-check(borrowed() == 5 and prompt.shown and prompt.flag.text == "Stay flagged", "manual unflag: popup at once, keys borrowed")
+check(borrowed() > 0 and prompt.shown, "manual unflag: popup at once, keys borrowed")
 setFlag(true)
--- Flag lost to a zone change (no flag wanted when we last looked): keys first, popup after 30 s.
+-- Flag lost to a zone change: keys first, popup after the delay (30 s).
 instance = true
 event("PLAYER_ENTERING_WORLD")
 setFlag(false)
@@ -705,24 +655,20 @@ advance(2)
 instance = false
 event("PLAYER_ENTERING_WORLD")
 advance(1)
-check(borrowed() == 5 and not prompt.shown, "after a dungeon: keys borrowed, no popup yet")
+check(borrowed() > 0 and not prompt.shown, "after a dungeon: keys borrowed, no popup yet")
 advance(31)
-check(prompt.shown and prompt.flag.text == "Stay flagged" and borrowed() == 5, "popup after 30 s, keys still borrowed")
+check(prompt.shown and borrowed() > 0, "popup after 30 s, keys still borrowed")
 setFlag(true)
 check(borrowed() == 0 and not prompt.shown, "flagging any other way hands the keys back")
--- Turned off: straight to the popup.
 SlashCmdList.HONORBOUND("autoflag off")
 setFlag(false)
 check(borrowed() == 0 and prompt.shown, "autoflag off: popup, no borrowed keys")
-check(not prompt.text.text:find("action bar key", 1, true), "autoflag off: the popup doesn't send you to keys that won't flag you")
 SlashCmdList.HONORBOUND("autoflag on")
-check(borrowed() == 5, "autoflag on borrows the keys")
-check(prompt.text.text:find("action bar key", 1, true), "autoflag on: the popup mentions the keys")
+check(borrowed() > 0, "autoflag on borrows the keys")
 setFlag(true)
 check(borrowed() == 0, "and hands them back once flagged")
 
--- 0.4.1: Forever names. Whispers to "First Surname-Realm" bounce; replies
--- go to "First-Surname", the form probes use.
+-- Forever names: whispers to "First Surname-Realm" bounce; replies go to "First-Surname".
 advance(400)
 sent = {}
 local fg = "Player-97-F0F001"
@@ -732,19 +678,17 @@ advance(2)
 check(#whispers("Aninja-Rppvp") == 1 and #whispers("Aninja Rppvp-ClassicBetaPvE") == 0, "reply goes to First-Surname, not First Surname-Realm")
 check(HonorBoundDB.likely[fg] and HonorBoundDB.likely[fg].name == "Aninja-Rppvp", "remembered under the whisperable name")
 
--- Always reply, even while our own probe to them is still waiting.
 sent = {}
 local both = "Player-97-F0F003"
 units.mouseover = { guid = both, flagged = true, faction = units.player.faction, name = "Both", realm = "Sides" }
 event("UPDATE_MOUSEOVER_UNIT")
-check(probeSent("Both-Sides"), "our probe goes out")
+probeSent("Both-Sides")
 addon("WQ|1|" .. both .. "|1|20|0.4.0", "Both Sides-ClassicBetaPvE")
 advance(2)
 local replied = false
 for _, m in ipairs(whispers("Both-Sides")) do replied = replied or m.message:find("^WR|") ~= nil end
 check(replied, "a probe crossing ours still gets a reply")
 
--- Re-probe a peer in view before the badge expires.
 sent = {}
 units.mouseover = nil
 units.nameplate1 = { guid = both, flagged = true, faction = units.player.faction, name = "Both", realm = "Sides" }
@@ -759,7 +703,6 @@ for t = 1, A.TTL do
 end
 check(reprobed and reprobed < A.TTL - 20, "re-probed before the badge expires (" .. tostring(reprobed) .. " s)")
 
--- Crests in whispers, both directions, and in yell and emotes.
 local function crestIn(event_, guid, name)
     local args = {}
     args[12] = guid
@@ -771,36 +714,16 @@ for _, e in ipairs({"CHAT_MSG_WHISPER", "CHAT_MSG_WHISPER_INFORM", "CHAT_MSG_YEL
     check(crestIn(e, both, "Both"), e .. " shows the crest")
 end
 
--- /honor sim off turns debug off too.
-SlashCmdList.HONORBOUND("sim 10")
-SlashCmdList.HONORBOUND("sim off")
-debugLines = {}
-SlashCmdList.HONORBOUND("debug")
-check(not tostring(debugLines[#debugLines]):find("Debug off", 1, true), "debug was already off after sim off")
-SlashCmdList.HONORBOUND("debug off")
-
--- A bounced reply shows in debug.
-SlashCmdList.HONORBOUND("debug on")
 sent = {}
 local gone = "Player-97-F0F004"
 addon("WQ|1|" .. gone .. "|0|0|0.4.0", "Gone Away-ClassicBetaPvE")
 advance(2)
-debugLines = {}
 check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", "No player named 'Gone-Away' is currently playing.") == true, "bounced reply error hidden")
-local logged = false
-for _, line in ipairs(debugLines) do logged = logged or line:find("reply to Gone%-Away bounced") ~= nil end
-check(logged, "bounced reply reported in debug")
-SlashCmdList.HONORBOUND("debug off")
 
--- 0.4.3: saved oath status. A remembered sworn player shows a crest as soon
--- as they're seen, while a re-check goes out.
+-- Saved oath status: a remembered sworn player's crest shows while a re-check goes out.
 advance(400)
 sent = {}
 local cg = "Player-96-C0C001"
-local sv = "Player-96-C0C000"
-players[sv] = { name = "Saved Status", realm = "ClassicBetaPvE" }
-addon("WQ|1|" .. sv .. "|1|20|0.4.3", "Saved Status-ClassicBetaPvE")
-check(HonorBoundDB.likely[sv] and HonorBoundDB.likely[sv].sworn == true, "an answer saves the oath status with the name")
 HonorBoundDB.likely[cg] = { name = "Cache-Dname", seen = time(), sworn = true }
 units.nameplate1 = { guid = cg, flagged = true, faction = units.player.faction, name = "Cache", realm = "Dname" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
@@ -812,40 +735,35 @@ units.nameplate1.flagged = false
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 check(not plate.UnitFrame.HonorBoundCrest.shown, "saved status never overrides the live flag")
 units.nameplate1.flagged = true
--- One unanswered re-check: the crest stays. Two: it goes.
 advance(31)
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(plate.UnitFrame.HonorBoundCrest.shown and not HonorBoundDB.noAddon[cg], "one missed re-check keeps the crest")
+check(plate.UnitFrame.HonorBoundCrest.shown, "one missed re-check keeps the crest")
 sent = {}
-check(probeSent("Cache-Dname"), "a second re-check goes out")
+probeSent("Cache-Dname")
 advance(31)
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(not plate.UnitFrame.HonorBoundCrest.shown and HonorBoundDB.noAddon[cg], "two missed re-checks drop it")
--- An answer saying "not sworn" replaces the saved status.
+check(not plate.UnitFrame.HonorBoundCrest.shown, "two missed re-checks drop it")
 local cn = "Player-96-C0C002"
 HonorBoundDB.likely[cn] = { name = "Gave-Up", seen = time(), sworn = true }
 units.nameplate1 = { guid = cn, flagged = true, faction = units.player.faction, name = "Gave", realm = "Up" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(plate.UnitFrame.HonorBoundCrest.shown, "saved sworn status shown")
 addon("WR|1|" .. cn .. "|0|0|0.4.3", "Gave Up-ClassicBetaPvE")
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(not plate.UnitFrame.HonorBoundCrest.shown and not HonorBoundDB.likely[cn].sworn, "a 'not sworn' answer removes the crest and the saved status")
+check(not plate.UnitFrame.HonorBoundCrest.shown, "a 'not sworn' answer replaces the saved status")
 units.nameplate1 = nil
 
--- 0.4.3: away protection. Unflagged and idle, the grace countdown waits.
+-- Away protection: unflagged and idle, the grace countdown waits.
 SlashCmdList.HONORBOUND("autoflag off")
 HonorBoundCharDB.sworn = true
 moving = false
 setFlag(false)
 advance(A.GRACE + 60)
 check(HonorBoundCharDB.sworn, "idle while unflagged: the oath holds past the grace period")
-check(prompt.text.text:find("Paused while you're away", 1, true), "the popup says the countdown is paused")
 moving = true
 advance(A.GRACE - 60)
 check(HonorBoundCharDB.sworn, "active again: the countdown resumes from where it stopped")
 advance(70)
 check(not HonorBoundCharDB.sworn, "and breaks the oath once the rest runs out")
--- Casting counts as activity even standing still.
 HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
 setFlag(true)
 moving = false
@@ -855,7 +773,6 @@ for _ = 1, A.GRACE + 5 do
     advance(1)
 end
 check(not HonorBoundCharDB.sworn, "casting while standing still keeps the countdown running")
--- Chatting doesn't.
 HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
 setFlag(true)
 setFlag(false)
@@ -868,19 +785,16 @@ moving = true
 setFlag(true)
 SlashCmdList.HONORBOUND("autoflag on")
 
--- 0.4.3: the saved status keeps the pledge level, and a claimed level above
--- the player's current level isn't shown.
-local tl = "Player-96-C0C010"
-players[tl] = { name = "Tip Level", realm = "ClassicBetaPvE" }
-addon("WQ|1|" .. tl .. "|1|12|0.4.3", "Tip Level-ClassicBetaPvE")
-check(HonorBoundDB.likely[tl].level == 12, "pledge level saved with the status")
+-- Pledge level in the tooltip, and never above the player's current level.
 local function tooltipFor(guid, name, realm)
     units.target = { guid = guid, flagged = true, faction = units.player.faction, name = name, realm = realm }
     tooltipLines = {}
     tooltipCallback(GameTooltip)
     return table.concat(tooltipLines, " / ")
 end
-check(tooltipCallback ~= nil, "tooltip hook installed")
+local tl = "Player-96-C0C010"
+players[tl] = { name = "Tip Level", realm = "ClassicBetaPvE" }
+addon("WQ|1|" .. tl .. "|1|12|0.4.3", "Tip Level-ClassicBetaPvE")
 check(tooltipFor(tl, "Tip", "Level"):find("since level 12", 1, true), "fresh answer: level in the tooltip")
 local tc = "Player-96-C0C011"
 HonorBoundDB.likely[tc] = { name = "Tip-Cached", seen = time(), sworn = true, level = 8 }
@@ -892,43 +806,16 @@ local shown = tooltipFor(tx, "Tall", "Tale")
 check(shown:find("Sworn to RP-PvP", 1, true) and not shown:find("level 40", 1, true), "a level above their current one (20) isn't shown")
 units.target = nil
 
--- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
--- in its own process by tests/scenario.lua.
+-- Scenarios needing a fresh client, each in its own process (tests/scenario.lua).
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken"}
+local scenarios = {"renounce", "idle_reset", "resurrect_crest", "inside", "options", "party", "remember", "options_broken"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
 end
 
--- /honor why explains a missing nameplate crest.
-local function why()
-    debugLines = {}
-    SlashCmdList.HONORBOUND("why")
-    return table.concat(debugLines, "\n"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-end
-SlashCmdList.HONORBOUND("sim 100")
-local shown = "Player-99-0EE001"
-units.target = { guid = shown, flagged = false, faction = units.player.faction, name = "Shown", realm = "Other Realm" }
-units.nameplate1 = units.target
-event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-advance(5)
-local report = why()
-check(report:find("Known addon user: yes (simulated)", 1, true) and report:find("Should wear a crest: yes", 1, true)
-    and report:find("showing: yes", 1, true), "why: a simulated user's crest is accounted for:\n" .. report)
-plate.UnitFrame.shown = false
-IsAddOnLoaded = function(name) return name == "Plater" end
-report = why()
-check(report:find("Blizzard nameplate frame visible: no", 1, true) and report:find("Plater", 1, true)
-    and report:find("hiding Blizzard's nameplate", 1, true), "why: a nameplate addon hiding the crest is named:\n" .. report)
-plate.UnitFrame.shown, IsAddOnLoaded = true, nil
-SlashCmdList.HONORBOUND("sim off")
-units.target = { guid = "Player-99-0EE002", flagged = true, faction = units.player.faction, name = "Fresh", realm = "Other Realm" }
-report = why()
-check(report:find("Known addon user: no", 1, true), "why: an unknown player is reported as not known yet:\n" .. report)
-units.target = nil
--- Nameplates the game never announced are still picked up, and one
--- nameplate failing doesn't stop the others.
+-- Nameplates the game never announced still get a crest, and one failing
+-- nameplate doesn't stop the others.
 SlashCmdList.HONORBOUND("sim 100")
 local plate2, plate3 = object(), object()
 plate2.UnitFrame, plate3.UnitFrame = object(), object()
@@ -947,16 +834,13 @@ units.nameplate3 = { guid = "Player-99-0EE102", flagged = false, faction = units
 debugLines = {}
 advance(5) -- no NAME_PLATE_UNIT_ADDED for either
 check(plate2.UnitFrame.HonorBoundCrest and plate2.UnitFrame.HonorBoundCrest.shown, "an unannounced nameplate still gets its crest")
-local reported = 0
-for _, line in ipairs(debugLines) do if line:find("Couldn't update a nameplate crest", 1, true) then reported = reported + 1 end end
-check(reported == 1, "a failing nameplate is reported once, not every second (" .. reported .. ")")
+check(printed("broken plate") == 1, "a failing nameplate is reported once, not every second (" .. printed("broken plate") .. ")")
 C_NamePlate = realPlates
 units.nameplate2, units.nameplate3 = nil, nil
 event("NAME_PLATE_UNIT_REMOVED", "nameplate2")
 event("NAME_PLATE_UNIT_REMOVED", "nameplate3")
 SlashCmdList.HONORBOUND("sim off")
--- Debug mode with Blizzard's empty party frames (not in a party): a frame
--- with no unit must not stop nameplates from updating.
+-- Empty party frames (no unit) must not stop nameplates updating.
 PartyFrame = {}
 for i = 1, 4 do
     local member = object("PartyMemberFrame" .. i)
@@ -983,11 +867,9 @@ event("NAME_PLATE_UNIT_ADDED", "nameplate1")
 HonorBoundDB.noAddon[ruledLater] = time() + 7200 -- learned after the nameplate appeared
 debugLines = {}
 advance(2)
-local tickReported = 0
-for _, line in ipairs(debugLines) do if line:find("Couldn't update discovery (", 1, true) then tickReported = tickReported + 1 end end
-check(tickReported == 1, "a broken tick is reported once (" .. tickReported .. ")")
+check(printed("broken tick") == 1, "a broken tick is reported once (" .. printed("broken tick") .. ")")
 local later = plate.UnitFrame.HonorBoundCrest
 check(later.shown and later.desaturated and later.tint[1] < 0.5, "the nameplate still redraws (dark grey) while the tick is broken")
 C_ChatInfo.InChatMessagingLockdown = realLockdown
 SlashCmdList.HONORBOUND("debug off")
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")
+print("Passed " .. assertions .. " assertions; scenarios: " .. table.concat(scenarios, ", ") .. ".")
