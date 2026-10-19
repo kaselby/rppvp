@@ -16,7 +16,8 @@ game.
   key or click flags you again. Keep playing and you won't notice.
 - **Gives you 5 minutes.** If you stay unflagged for 5 minutes, your oath
   breaks and your crest is gone. The clock waits while you're inside a
-  dungeon or away from the keyboard.
+  dungeon, and doesn't start until you move, so being unflagged while
+  you're away from the keyboard costs nothing.
 - **Shows the crest.** Sworn players wear a blue (Alliance) or red (Horde)
   crest in place of the usual PvP icon (on portraits and party frames), on
   nameplates, and in chat. Hover it

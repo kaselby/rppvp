@@ -133,6 +133,10 @@ are stored on Blizzard's servers and addon data isn't:
   meanwhile the record is local only. `/honor save` tries again.
 - A crash or disconnect loses at most the 2 min since the last write, which
   the 2 min gap rule ignores.
+- Character macro slots aren't counted against a constant (Forever has two
+  rows more than Classic, and `MAX_CHARACTER_MACROS` may say 18): the save is
+  created and only a failed create counts as full. A character macro is any
+  index past the account macro count.
 
 ## Development and validation
 
