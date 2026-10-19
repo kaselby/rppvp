@@ -3,7 +3,7 @@
 local _, A = ...
 local MEDIA = "Interface\\AddOns\\HonorBound\\Media\\"
 local eventFrame = CreateFrame("Frame")
-local db, char, myGUID, myServer, lastAnnounce, lastPayload, lastPledgePayload
+local db, char, myGUID, lastAnnounce, lastPayload, lastPledgePayload
 local announceRetryAt = 0
 local peers, widgets, plates = {}, {}, {}
 local lastAnswer, lastMinute = -100, 0
@@ -22,7 +22,7 @@ local function Debug(text, verbose)
     end
 end
 local SENT, HEARD, FAILED = "|cffffd100Sent|r", "|cff55ff55Heard|r", "|cffff5555Couldn't send|r"
-local ROUTES = {CHANNEL = "the realm channel", GUILD = "your guild", PARTY = "your party",
+local ROUTES = {GUILD = "your guild", PARTY = "your party",
     RAID = "your raid", INSTANCE_CHAT = "your instance group", WHISPER = "a whisper",
     YELL = "a yell", SAY = "say"}
 local REASONS = {InvalidPrefix = "the addon's message name isn't registered",
@@ -270,12 +270,6 @@ local function TimeResult(kind, guid)
     if seenAt[guid] then seenAt[guid] = false end
 end
 
-local function Server(guid)
-    return guid and guid:match("^Player%-(%d+)%-")
-end
-local function OtherRealm(guid)
-    return myServer and Server(guid) ~= myServer
-end
 local function Locked()
     return C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown()
 end
@@ -331,16 +325,6 @@ Describe = function(message)
         local guid, inside = message:match("^I|1|([^|]+)|([01])|")
         return (guid == myGUID and "that you're" or (Who(guid) .. " is")) .. (inside == "1" and " inside" or " out of")
             .. " a dungeon or raid"
-    elseif kind == "F" then
-        local _, name = message:match("^F|1|([^|]+)|([^|]+)|")
-        return "a find: " .. tostring(name) .. " has the addon"
-    elseif kind == "FS" then
-        local _, name = message:match("^FS|1|([^|]+)|([^|]+)|")
-        return "a simulated find: " .. tostring(name)
-    elseif kind == "N" then
-        local list = message:match("^N|1|(.*)$") or ""
-        local _, commas = list:gsub(",", "")
-        return "a list of " .. Count(commas + 1, "player") .. " without the addon"
     end
     return "a message (" .. message .. ")"
 end
@@ -358,13 +342,6 @@ local function DecodeWhisper(message)
     if not A.ValidGUID(guid) then return end
     local peer = DecodeStatus(sworn, raw, version)
     if peer then return kind, guid, peer end
-end
-local function FoundPayload(guid, name, peer)
-    return ("F|1|%s|%s|%d|%d|%s"):format(guid, name, peer.sworn and 1 or 0,
-        peer.pledgedSinceLevel or 0, peer.version or "?")
-end
-local function SameStatus(record, peer)
-    return record and record.sworn == peer.sworn and record.level == (peer.pledgedSinceLevel or 0)
 end
 
 local function ChatChanged(guid)
@@ -1597,7 +1574,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         -- Never invent an earlier pledge level.
         A.EnsurePledge(char, UnitLevel("player"))
         myGUID = GUID("player")
-        myServer = Server(myGUID)
         LoadCaches()
         local addFilter = ChatFrame_AddMessageEventFilter
             or (ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter)

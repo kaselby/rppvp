@@ -2,9 +2,9 @@
 
 For contributors. Player docs are in the [README](../README.md).
 
-## Discovery and compatibility (`whisper-all` branch)
+## Discovery and compatibility
 
-This branch drops the hidden channel. Everyone you see (nameplates, mouseover,
+There is no hidden channel. Everyone you see (nameplates, mouseover,
 target, focus, chat speakers) is asked directly by a hidden addon whisper,
 same realm or not. Discovery uses GUIDs, because Forever's surname-bearing
 character names can differ between chat and unit frames. Forever names are
