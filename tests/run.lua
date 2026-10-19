@@ -129,6 +129,9 @@ end
 function RequestTimePlayed() playedRequests = playedRequests + 1 end
 function UnitLevel() return 20 end
 function time() return 1000000 + now end
+-- Server time; offline days are added to serverSkip.
+serverSkip = 0
+function GetServerTime() return 1000000 + now + serverSkip end
 local inGuild = true
 function IsInGuild() return inGuild end
 local lockdown, players, systemFilters, statusResult, whisperResult = false, {}, {}, nil, nil
@@ -255,6 +258,19 @@ advance(A.GRACE + 2)
 check(HonorBoundCharDB.sworn == false and not prompt.shown, "oath breaks after grace")
 check(lastSent():find("|0|"), "broken oath broadcast")
 
+-- Oathbreaker: a broken sword for a day, in game or not, and no swearing again till then.
+local brokenLeft = (HonorBoundCharDB.brokenUntil or 0) - GetServerTime()
+check(brokenLeft > A.OATHBREAKER - 10 and brokenLeft <= A.OATHBREAKER, "oathbreaker mark for a day of server time")
+local brokenSent
+for _, m in ipairs(sent) do if m.message:sub(1, 2) == "B|" then brokenSent = m.message end end
+check(brokenSent and A.DecodeBroken(brokenSent, GetServerTime()) == me, "the mark is announced with the status")
+check(playerBadge().shown and playerBadge().crest.texturePath:find("Broken", 1, true), "your frame shows the broken sword")
+SlashCmdList.HONORBOUND("swear")
+check(not HonorBoundCharDB.joining and not HonorBoundCharDB.sworn, "can't swear again while an oathbreaker")
+serverSkip = serverSkip + A.OATHBREAKER -- a day offline
+advance(1)
+check(not playerBadge().shown, "after a day the broken sword is gone")
+
 -- Swearing again completes once flagged.
 SlashCmdList.HONORBOUND("swear")
 check(not HonorBoundCharDB.sworn, "swear waits for the flag")
@@ -265,7 +281,9 @@ check(HonorBoundCharDB.sworn and playerBadge().shown, "oath retaken on flag")
 SlashCmdList.HONORBOUND("renounce")
 check(HonorBoundCharDB.sworn, "renounce asks for confirmation")
 SlashCmdList.HONORBOUND("renounce confirm")
-check(HonorBoundCharDB.sworn == false and not playerBadge().shown, "renounce removes crest")
+check(HonorBoundCharDB.sworn == false and playerBadge().crest.texturePath:find("Broken", 1, true), "renouncing is breaking: the crest becomes a broken sword")
+serverSkip = serverSkip + A.OATHBREAKER
+advance(1)
 
 advance(A.TTL + 1)
 check(not targetBadge().shown, "expire silent peers")
@@ -878,7 +896,7 @@ units.target = nil
 
 -- Scenarios needing a fresh client, each in its own process (tests/scenario.lua).
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "resurrect_crest", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near", "chat_faction", "save_early_swear", "save_reenable"}
+local scenarios = {"renounce", "idle_reset", "resurrect_crest", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near", "chat_faction", "save_early_swear", "save_reenable", "oathbreaker"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")

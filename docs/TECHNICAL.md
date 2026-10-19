@@ -28,6 +28,7 @@ server.
 | `S\|2\|…` + `P\|1\|…` status and pledge level | Group, guild | Login, every 60 s, on oath/flag/group change |
 | `WQ\|1\|…` probe, carries your status | Whisper | Anyone of your faction you see: remembered addon users first, then mouseover/target, chat, nameplates. Skipped if known (re-checked before the 5 min expiry), awaiting a reply, or on the no-addon list |
 | `WR\|1\|…` reply, carries your status | Whisper | A `WQ` arrives. At most one per player per minute |
+| `B\|1\|<GUID>\|<end>\|<version>` oathbreaker mark | Same routes as the above | After each status, while you're an oathbreaker. `<end>` is server time (`GetServerTime`); ends more than a day off are refused, and a whispered mark must come from the GUID's owner. Older clients ignore it |
 
 No reply within 30 s puts a player on the no-addon list for 2 hours (saved).
 Any message from them clears it.
@@ -110,11 +111,13 @@ are stored on Blizzard's servers and addon data isn't:
 
 ```
 #HonorBound save data. Do not edit or delete this macro: a changed line is ignored and your pledge may be lost.
-#HB3 l=12;s=40210;p=183342;u=95;n=41;h=4ACF1B72A61A7A37
+#HB4 l=12;s=40210;p=183342;u=95;n=41;b=0;h=4ACF1B72A61A7A37
 ```
 
 - `l` level (0 = not sworn: a break is saved too, the macro is never
-  deleted), `s` since, `p` seen, `u` untracked, `n` write counter, `h` a
+  deleted), `s` since, `p` seen, `u` untracked, `n` write counter, `b` the
+  server time the oathbreaker mark ends (0 none; `HB3` saves, which lack it,
+  still read), `h` a
   hash of all of it plus the character's GUID (hashed twice, so a one-second
   change scrambles it). Hand edits and macros copied to another character are
   rejected; the formula ships with the addon, so this stops casual edits, not
@@ -140,6 +143,8 @@ are stored on Blizzard's servers and addon data isn't:
   another computer left.
 - A crash or disconnect loses at most the 2 min since the last write, which
   the 2 min gap rule ignores.
+- The oathbreaker mark is taken from whichever copy ends later, regardless of
+  the counter, so deleting the macro or the saved variables doesn't clear it.
 - Character macro slots aren't counted against a constant (Forever has two
   rows more than Classic, and `MAX_CHARACTER_MACROS` may say 18): the save is
   created and only a failed create counts as full. A character macro is any

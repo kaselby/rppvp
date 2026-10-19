@@ -50,8 +50,10 @@ Log in and HonorBound asks if you want to swear on that character. Click
 you're in. Choose **Not now** and you can swear any
 time with `/honor swear`.
 
-If your oath breaks, `/honor swear` takes it again, and your "since level"
-starts over.
+If your oath breaks (or you renounce it), you're an **oathbreaker** for 24
+hours, in game or not: other HonorBound users see a broken sword in place of
+your crest. After that, `/honor swear` takes the oath again, and your "since
+level" starts over.
 
 ## Settings and commands
 
