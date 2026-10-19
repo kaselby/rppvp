@@ -296,9 +296,6 @@ local function TimeResult(kind, guid)
     if seenAt[guid] then seenAt[guid] = false end
 end
 
-local function Locked()
-    return SendingBlocked()
-end
 local function Between(range)
     return range[1] + math.random() * (range[2] - range[1])
 end
@@ -498,7 +495,7 @@ local function PumpWhispers(now)
 end
 local function PumpProbes()
     local now = GetTime()
-    if Locked() or not myGUID then return end
+    if SendingBlocked() or not myGUID then return end
     PumpWhispers(now)
 end
 
