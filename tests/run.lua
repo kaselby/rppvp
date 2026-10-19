@@ -54,6 +54,7 @@ function methods:SetShown(value) self.shown = value and true or false end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:IsShown() return self.shown end
+function methods:IsVisible() return self.shown ~= false and (not self.parent or not self.parent.IsVisible or self.parent:IsVisible()) end
 function methods:SetScript(event, callback) self.scripts[event] = callback end
 function methods:HookScript(event, callback) self.scripts[event] = callback end
 function methods:HasScript() return true end
@@ -896,4 +897,30 @@ for _, name in ipairs(scenarios) do
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
 end
 
+-- /honor why explains a missing nameplate crest.
+local function why()
+    debugLines = {}
+    SlashCmdList.HONORBOUND("why")
+    return table.concat(debugLines, "\n"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+end
+SlashCmdList.HONORBOUND("sim 100")
+local shown = "Player-99-0EE001"
+units.target = { guid = shown, flagged = false, faction = units.player.faction, name = "Shown", realm = "Other Realm" }
+units.nameplate1 = units.target
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+advance(5)
+local report = why()
+check(report:find("Known addon user: yes (simulated)", 1, true) and report:find("Should wear a crest: yes", 1, true)
+    and report:find("showing: yes", 1, true), "why: a simulated user's crest is accounted for:\n" .. report)
+plate.UnitFrame.shown = false
+IsAddOnLoaded = function(name) return name == "Plater" end
+report = why()
+check(report:find("Blizzard nameplate frame visible: no", 1, true) and report:find("Plater", 1, true)
+    and report:find("hiding Blizzard's nameplate", 1, true), "why: a nameplate addon hiding the crest is named:\n" .. report)
+plate.UnitFrame.shown, IsAddOnLoaded = true, nil
+SlashCmdList.HONORBOUND("sim off")
+units.target = { guid = "Player-99-0EE002", flagged = true, faction = units.player.faction, name = "Fresh", realm = "Other Realm" }
+report = why()
+check(report:find("Known addon user: no", 1, true), "why: an unknown player is reported as not known yet:\n" .. report)
+units.target = nil
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

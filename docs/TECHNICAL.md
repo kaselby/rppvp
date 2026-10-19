@@ -47,6 +47,9 @@ too much is sent at once, which is what this branch is for testing.
   reported, debug or not: the first at once, then one summary every 10 s.
 - `/honor rate N` caps whispers at N a second for testing; `/honor rate off`
   removes the cap.
+- `/honor why` (target or hover a player): every condition behind their
+  nameplate crest — known, sworn, faction, flag, nameplate frame visible,
+  crest showing, nameplate addons loaded.
 
 Debug: `/honor debug on` shows status updates, failures and a summary line
 each minute; `/honor debug verbose` adds every whisper probe and reply. While

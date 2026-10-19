@@ -1314,6 +1314,54 @@ local function PlateCrest(unit)
     end
     return crest
 end
+-- /honor why: for the target (or mouseover), every condition behind their
+-- nameplate crest, to find out why one is missing. Read only.
+local PLATE_ADDONS = {"Plater", "TidyPlates_ThreatPlates", "TidyPlates", "BetterBlizzPlates", "Kui_Nameplates", "NeatPlates"}
+local function WhyNoCrest(say)
+    local unit = GUID("target") and "target" or "mouseover"
+    local guid = GUID(unit)
+    if not guid or not UnitIsPlayer(unit) then say("Target a player (or hover one) first.") return end
+    local yes = function(v) return v and "yes" or "|cffff5555no|r" end
+    local now = GetTime()
+    local peer = peers[guid]
+    local fresh = peer and now - peer.seen < A.TTL
+    say("Checking " .. Who(guid) .. ":")
+    if fresh then
+        say("  Known addon user: yes (" .. (peer.simulated and "simulated" or "heard " .. math.floor(now - peer.seen) .. " s ago")
+            .. "), sworn: " .. yes(peer.sworn) .. ".")
+    elseif likely[guid] then
+        say("  Known addon user: remembered only (saved status " .. (likely[guid].sworn and "sworn" or "not sworn")
+            .. ", " .. (likely[guid].misses or 0) .. " unanswered re-checks).")
+    else
+        local state = pending[guid] and "being asked now" or RuledOut(guid) and "no answer, marked as not having the addon"
+            or probes[guid] and "waiting to be asked" or Simulated(guid) and "simulated, not asked yet" or "not asked yet"
+        say("  Known addon user: |cffff5555no|r (" .. state .. ").")
+    end
+    local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+    say("  Same faction (can be whispered): " .. yes(not Secret(theirs) and theirs == ours)
+        .. ". PvP-flagged right now: " .. yes(Flagged(unit)) .. (InPausedInstance() and " (inside: not needed)" or "") .. ".")
+    say("  Should wear a crest: " .. yes(Status(unit) ~= nil) .. ". Nameplate crests: " .. yes(db.plates) .. ".")
+    local plateUnit
+    for u in pairs(plates) do if GUID(u) == guid then plateUnit = u end end
+    if not plateUnit then say("  Nameplate: none on screen for them.") return end
+    local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit(plateUnit)
+    if not plate then say("  Nameplate: the game didn't hand it over.") return end
+    if plate.IsForbidden and plate:IsForbidden() then say("  Nameplate: locked by the game here (forbidden), crests can't be added.") return end
+    local host = plate.UnitFrame or plate
+    local crest = host.HonorBoundCrest
+    say("  Blizzard nameplate frame visible: " .. yes(host:IsVisible()) .. ". Crest made: " .. yes(crest ~= nil)
+        .. ", showing: " .. yes(crest and crest:IsShown()) .. ", actually visible: " .. yes(crest and crest:IsVisible()) .. ".")
+    local loaded = {}
+    for _, name in ipairs(PLATE_ADDONS) do
+        if (C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded(name)) or (IsAddOnLoaded and IsAddOnLoaded(name)) then
+            loaded[#loaded + 1] = name
+        end
+    end
+    if #loaded > 0 then
+        say("  Nameplate addons loaded: " .. table.concat(loaded, ", ")
+            .. (host:IsVisible() and "." or ". They're hiding Blizzard's nameplate, which carries the crest."))
+    end
+end
 RefreshPlate = function(unit)
     local crest = PlateCrest(unit)
     if not crest then return end
@@ -1510,6 +1558,10 @@ SlashCmdList.HONORBOUND = function(input)
     end
     if (input or ""):lower():match("^%s*chatcheck%s*$") then
         A.ChatCheck(Print)
+        return
+    end
+    if (input or ""):lower():match("^%s*why%s*$") then
+        WhyNoCrest(Print)
         return
     end
     local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")
