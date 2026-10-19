@@ -389,18 +389,23 @@ event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(neighbour, true), "GUILD", "Neighbour
 check(HonorBoundDB.noAddon[neighbour] == nil, "hearing a player clears their no-addon entry")
 check(plate.UnitFrame.HonorBoundCrest.shown, "and their crest appears")
 
--- Rate limits: refused sends are always reported, debug or not.
-debugLines = {}
-whisperResult = 3
-sent = {}
-for i = 1, 5 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
-advance(1)
+-- Rate limits: refused sends are for developers, shown in debug mode only.
 local function limited()
     local list = {}
     for _, line in ipairs(debugLines) do if line:find("Rate limited", 1, true) then list[#list + 1] = line end end
     return list
 end
-check(#limited() == 1 and limited()[1]:find("5 messages refused: sending too fast", 1, true), "refused whispers are reported at once: " .. tostring(limited()[1]))
+debugLines = {}
+whisperResult = 3
+for i = 1, 3 do say(("Q%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12200 + i)) end
+advance(12)
+check(#limited() == 0, "players never see rate-limit reports with debug off")
+SlashCmdList.HONORBOUND("debug on")
+debugLines = {}
+sent = {}
+for i = 1, 5 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
+advance(1)
+check(#limited() == 1 and limited()[1]:find("5 messages refused", 1, true) and limited()[1]:find("sending too fast", 1, true), "refused whispers are reported at once: " .. tostring(limited()[1]))
 for i = 6, 9 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
 advance(3)
 check(#limited() == 1, "further refusals wait for the next summary")
@@ -411,6 +416,7 @@ ERR_CHAT_THROTTLED = "You are sending too many messages."
 check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", ERR_CHAT_THROTTLED) == nil, "the server's own throttle notice stays visible")
 advance(11)
 check(#limited() == 3 and limited()[3]:find("server says we're sending too fast", 1, true), "and is counted as a rate limit: " .. tostring(limited()[3]))
+SlashCmdList.HONORBOUND("debug off")
 
 -- Chat names wear the same faction crest as frames and nameplates.
 local function chatName(factionOf, name)
@@ -1014,4 +1020,23 @@ local later = plate.UnitFrame.HonorBoundCrest
 check(later.shown and later.desaturated and later.tint[1] < 0.5, "the nameplate still redraws (dark grey) while the tick is broken")
 C_ChatInfo.InChatMessagingLockdown = realLockdown
 SlashCmdList.HONORBOUND("debug off")
+-- Errors are developer information: nothing reaches the player with debug off.
+SlashCmdList.HONORBOUND("debug off")
+local quietPlates = C_NamePlate
+local quietPlate = object()
+quietPlate.UnitFrame = object()
+quietPlate.namePlateUnitToken = "nameplate7"
+C_NamePlate = {
+    GetNamePlateForUnit = function(unit) if unit == "nameplate7" then error("broken plate") end end,
+    GetNamePlates = function() return {quietPlate} end,
+}
+units.nameplate7 = { guid = "Player-99-0EE777", flagged = true, faction = units.player.faction, name = "Quiet", realm = "Other Realm" }
+debugLines = {}
+advance(65)
+local leaked = 0
+for _, line in ipairs(debugLines) do if line:find("Couldn't update", 1, true) or line:find("broken plate", 1, true) then leaked = leaked + 1 end end
+check(leaked == 0, "a failing nameplate shows the player nothing with debug off (" .. leaked .. ")")
+C_NamePlate = quietPlates
+units.nameplate7 = nil
+event("NAME_PLATE_UNIT_REMOVED", "nameplate7")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

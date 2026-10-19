@@ -162,7 +162,7 @@ local function Instanced()
     local inside = IsInInstance()
     return inside and true or false
 end
--- Refused sends are always reported, debug or not: the first at once, then
+-- Refused sends, for developers: debug mode only. The first at once, then
 -- one summary every 10 s so a burst doesn't flood chat.
 local REFUSED_EVERY = 10
 local refused = {count = 0, reasons = {}, reported = -100}
@@ -175,7 +175,7 @@ local function ReportRefused(now)
     local why = {}
     for reason, n in pairs(refused.reasons) do why[#why + 1] = reason .. (n > 1 and (" ×" .. n) or "") end
     table.sort(why)
-    Print("|cffff5555Rate limited:|r " .. Count(refused.count, "message") .. " refused"
+    Debug("|cffff5555Rate limited:|r " .. Count(refused.count, "message") .. " refused"
         .. (refused.reported > 0 and (" in the last " .. REFUSED_EVERY .. " s") or "") .. ": " .. table.concat(why, "; ") .. ".")
     refused.count, refused.reasons, refused.reported = 0, {}, now
 end
@@ -1015,9 +1015,7 @@ function A.CheckPlayedAnswer(now)
         A.RequestPlayed()
     else
         A.playedAskedAt = nil
-        if char.sworn then
-            Print("Couldn't get your play time from the server, so this session's verification will be checked at your next login.")
-        end
+        Debug("No answer to /played after 3 tries; this session is checked at the next login.")
     end
 end
 function A.OnPlayed(total)
@@ -1550,14 +1548,13 @@ local function PlateCrest(unit)
     end
     return crest
 end
--- A nameplate that failed to refresh: say so (once a minute, debug or not,
--- since it means a missing crest), with the game's error for a bug report.
+-- Something failed to refresh: tell developers (debug mode, once a minute
+-- per kind) with the game's error; everything else keeps updating.
 local errorAt = {}
 local function ReportError(what, err)
-    Debug("Error while updating " .. what .. ": " .. tostring(err))
     if GetTime() - (errorAt[what] or -100) >= 60 then
         errorAt[what] = GetTime()
-        Print("Couldn't update " .. what .. " (" .. tostring(err) .. "). Everything else still updates.")
+        Debug("Couldn't update " .. what .. " (" .. tostring(err) .. "). Everything else still updates.")
     end
 end
 local function PlateError(unit, err) ReportError("a nameplate crest", err) end
@@ -1776,8 +1773,7 @@ local function PrintStatus()
     end
     local count = 0
     for _, peer in pairs(peers) do if peer.sworn then count = count + 1 end end
-    Print(Count(count, "sworn player") .. " seen recently. Everyone you see is asked by whisper"
-        .. (whisperCap and (" (at most " .. whisperCap .. " a second).") or ", unpaced."))
+    Print(Count(count, "sworn player") .. " seen recently.")
     Print("Crests in chat: " .. (not A.chatAvailable and "not supported on this client" or db.chatIcons == false and "off" or "on")
         .. ". Reflag on your next action bar key: " .. (db.autoReflag == false and "off" or "on") .. ". /honor help for commands.")
 end
@@ -1994,7 +1990,10 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             Refresh()
         end)
         A.optionsCategory = built and category or nil
-        if not built then Print("Couldn't build the settings page (" .. tostring(category) .. "). The /honor commands still work.") end
+        if not built then
+            Print("Couldn't build the settings page. The /honor commands still work.")
+            Debug("Settings page error: " .. tostring(category))
+        end
         C_Timer.NewTicker(1, Tick)
         -- Read the save once the game says macros are loaded (UPDATE_MACROS),
         -- or after 10 s if that already happened; /played is asked for then.

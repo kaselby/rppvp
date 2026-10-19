@@ -1,4 +1,4 @@
--- The server never answers /played: ask 3 times, 30 s apart, then say so.
+-- The server never answers /played: ask 3 times, 30 s apart, then give up quietly (debug says so).
 setup()
 assert(playedRequests == 1, "asked once after login")
 advance(31)
@@ -7,6 +7,6 @@ advance(31)
 assert(playedRequests == 3, "and a third time")
 advance(31)
 assert(playedRequests == 3, "no more than three tries")
-assert(table.concat(debugLines, "\n"):find("Couldn't get your play time from the server", 1, true), "then says so")
+assert(not table.concat(debugLines, "\n"):find("/played", 1, true), "then gives up quietly: players aren't told")
 event("TIME_PLAYED_MSG", 36000, 600)
 assert(HonorBoundCharDB.verify and HonorBoundCharDB.verify.since == 36000, "a late answer still starts verification")

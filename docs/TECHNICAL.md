@@ -43,8 +43,9 @@ warns of an undocumented **server-side** throttle and possible disconnects if
 too much is sent at once, which is what this branch is for testing.
 
 - Any refused send (the result code, e.g. "sending too fast, the game is
-  throttling us") and the server's own throttle notice are **always**
-  reported, debug or not: the first at once, then one summary every 10 s.
+  throttling us") and the server's own throttle notice are reported in debug
+  mode (`/honor debug on`): the first at once, then one summary every 10 s.
+  Players never see them, nor raw Lua errors (also debug only).
 - `/honor rate N` caps whispers at N a second for testing; `/honor rate off`
   removes the cap.
 - `/honor why` (target or hover a player): every condition behind their
