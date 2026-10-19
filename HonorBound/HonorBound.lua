@@ -34,7 +34,8 @@ local REASONS = {InvalidPrefix = "the addon's message name isn't registered",
 -- Codes from Enum.SendAddonMessageResult, for clients that don't expose it.
 local CODE_NAMES = {[1] = "InvalidPrefix", [2] = "InvalidMessage", [3] = "AddonMessageThrottle",
     [4] = "InvalidChatType", [5] = "NotInGroup", [6] = "TargetRequired", [7] = "InvalidChannel",
-    [8] = "ChannelThrottle", [9] = "GeneralError", [11] = "AddOnMessageLockdown"}
+    [8] = "ChannelThrottle", [9] = "GeneralError", [10] = "NotInGuild", [11] = "AddOnMessageLockdown",
+    [12] = "TargetOffline"}
 local function Reason(result)
     local codes = Enum and Enum.SendAddonMessageResult
     if type(codes) == "table" then
