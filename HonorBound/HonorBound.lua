@@ -522,10 +522,13 @@ local function PumpWhispers(now)
     end
     local sent = 0
     while replies[1] and now - replies[1].at > PROBE_STALE do table.remove(replies, 1) end
+    -- A refused send didn't happen: nothing is marked or used up, it stays
+    -- queued, and the pass stops until the next second.
     while replies[1] and MayWhisper(sent) do
-        local reply = table.remove(replies, 1)
+        local reply = replies[1]
+        if not Send(WhisperPayload("R"), "WHISPER", reply.name) then return end
+        table.remove(replies, 1)
         replied[reply.name] = now
-        Send(WhisperPayload("R"), "WHISPER", reply.name)
         sent = sent + 1
     end
     local order = {}
@@ -546,9 +549,15 @@ local function PumpWhispers(now)
         Unqueue(guid)
         local name = e.name or GuidName(guid)
         if name then -- not resolvable yet: the next sighting re-queues
+            if not Send(WhisperPayload("Q"), "WHISPER", name) then
+                -- Refused: not asked after all, so no answer is awaited (no
+                -- false "no addon"). Back in line; it's dropped if it waits
+                -- too long, and asked again when next seen.
+                probes[guid], probeCount = e, probeCount + 1
+                return
+            end
             pending[guid] = {at = now, name = name}
             stats.probed = stats.probed + 1
-            Send(WhisperPayload("Q"), "WHISPER", name)
             sent = sent + 1
             ChatChanged(guid)
             SimProbe(guid, name)

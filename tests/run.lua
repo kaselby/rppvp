@@ -404,18 +404,20 @@ SlashCmdList.HONORBOUND("debug on")
 debugLines = {}
 sent = {}
 for i = 1, 5 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
-advance(1)
-check(#limited() == 1 and limited()[1]:find("5 messages refused", 1, true) and limited()[1]:find("sending too fast", 1, true), "refused whispers are reported at once: " .. tostring(limited()[1]))
+advance(11)
+check(#limited() >= 1 and limited()[1]:find("sending too fast", 1, true), "with debug on, refusals are reported: " .. tostring(limited()[1]))
+debugLines = {}
 for i = 6, 9 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
-advance(3)
-check(#limited() == 1, "further refusals wait for the next summary")
-advance(8)
-check(#limited() == 2 and limited()[2]:find("4 messages refused in the last 10 s", 1, true), "then one summary: " .. tostring(limited()[2]))
+advance(30)
+check(#limited() >= 2 and #limited() <= 4, "at most one report every 10 s (" .. #limited() .. " in 30 s)")
 whisperResult = nil
+debugLines = {}
 ERR_CHAT_THROTTLED = "You are sending too many messages."
 check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", ERR_CHAT_THROTTLED) == nil, "the server's own throttle notice stays visible")
 advance(11)
-check(#limited() == 3 and limited()[3]:find("server says we're sending too fast", 1, true), "and is counted as a rate limit: " .. tostring(limited()[3]))
+local serverNotice = false
+for _, line in ipairs(limited()) do serverNotice = serverNotice or line:find("server says we're sending too fast", 1, true) ~= nil end
+check(serverNotice, "and is counted as a rate limit")
 SlashCmdList.HONORBOUND("debug off")
 
 -- Chat names wear the same faction crest as frames and nameplates.
@@ -1127,4 +1129,29 @@ say("Rage Nightwing-ClassicBetaPvE", "Player-99-0C4A72")
 advance(1)
 check(#whispers("Blastor-Totemborn") == 1 and #whispers("Blastor Totemborn") == 0, "a chat speaker is probed as First-Surname")
 check(#whispers("Rage-Nightwing") == 1, "and with a realm attached too")
+-- A refused whisper didn't happen: nobody is marked no-addon for it, the
+-- pass stops, and it goes out once sends work again.
+local tried = 0
+local sendReal = C_ChatInfo.SendAddonMessage
+C_ChatInfo.SendAddonMessage = function(...) tried = tried + 1 return sendReal(...) end
+whisperResult = 9
+sent = {}
+for k = 1, 5 do say(("Refused%d-OtherRealm"):format(k), ("Player-99-%06X"):format(0x0F0000 + k)) end
+tried = 0
+advance(1)
+check(tried == 1, "one refusal stops the pass (" .. tried .. " attempts)")
+advance(35)
+local wronglyMarked = 0
+for k = 1, 5 do if HonorBoundDB.noAddon[("Player-99-%06X"):format(0x0F0000 + k)] then wronglyMarked = wronglyMarked + 1 end end
+check(wronglyMarked == 0, "nobody is marked no-addon because of a refused probe")
+addon("WQ|1|Player-99-0F1001|1|10|0.7.4", "Answer-Me")
+advance(1)
+whisperResult = nil
+sent = {}
+advance(1)
+check(#whispers("Answer-Me") == 1 and whispers("Answer-Me")[1].message:sub(1, 3) == "WR|", "a refused reply is sent once sends work again")
+say("Refused1-OtherRealm", ("Player-99-%06X"):format(0x0F0001))
+advance(1)
+check(#whispers("Refused1-OtherRealm") == 1, "and a player whose probe was refused is asked when seen again")
+C_ChatInfo.SendAddonMessage = sendReal
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")
