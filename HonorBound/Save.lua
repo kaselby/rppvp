@@ -54,11 +54,16 @@ function A.DecodeSave(guid, body)
 end
 
 -- Only character macros count: an account-wide macro of the same name would
--- be shared with every character.
+-- be shared with every character. Account macros fill indexes 1 to their
+-- count and character macros come after every account slot, so anything past
+-- the account count is a character macro. (MAX_ACCOUNT_MACROS isn't used: it
+-- lives in the macro UI, which may not be loaded, and Forever's limits differ
+-- from Classic's.)
 local function Index()
-    if not GetMacroIndexByName then return end
+    if not (GetMacroIndexByName and GetNumMacros) then return end
     local index = GetMacroIndexByName(A.SAVE_NAME)
-    if type(index) == "number" and index > (MAX_ACCOUNT_MACROS or 120) then return index end
+    local account = GetNumMacros()
+    if type(index) == "number" and index > 0 and index > (account or 0) then return index end
 end
 function A.ReadSave(guid)
     local index = Index()
@@ -77,8 +82,13 @@ function A.WriteSave(guid, record)
         if current ~= body then EditMacro(index, A.SAVE_NAME, SAVE_ICON, body) end
         return true
     end
-    local _, perCharacter = GetNumMacros()
-    if (perCharacter or 0) >= (MAX_CHARACTER_MACROS or 18) then return false, "full" end
-    if CreateMacro(A.SAVE_NAME, SAVE_ICON, body, true) then return true end
-    return false, "unsupported"
+    -- How many character macros fit isn't counted here (Forever has two rows
+    -- more than Classic, and MAX_CHARACTER_MACROS may say Classic's 18): ask
+    -- the game to make one, and call it full only if it didn't.
+    local _, before = GetNumMacros()
+    local ok, made = pcall(CreateMacro, A.SAVE_NAME, SAVE_ICON, body, true)
+    if ok and type(made) == "number" and made > 0 then return true end
+    local _, after = GetNumMacros()
+    if (after or 0) > (before or 0) then return true end
+    return false, (before or 0) > 0 and "full" or "unsupported"
 end

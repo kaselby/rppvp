@@ -97,16 +97,26 @@ local blizzardPvp = SlashCmdList.PVP
 LE_PARTY_CATEGORY_INSTANCE = 2
 function GetTime() return now end
 playedRequests = 0
--- Macros like the game: account ones at 1-120, character ones from 121.
-MAX_ACCOUNT_MACROS, MAX_CHARACTER_MACROS = 120, 18
+-- Macros like Forever: account ones at 1-120, character ones from 121, and
+-- 30 character slots (two rows more than Classic). MAX_CHARACTER_MACROS still
+-- says Classic's 18, as the stale constant would.
+MAX_ACCOUNT_MACROS, MAX_CHARACTER_MACROS, CHARACTER_SLOTS = 120, 18, 30
 macros = {}
-function GetNumMacros() local n = 0 for _ in pairs(macros) do n = n + 1 end return 0, n end
+function GetNumMacros()
+    local account, character = 0, 0
+    for index in pairs(macros) do
+        if index > 120 then character = character + 1 else account = account + 1 end
+    end
+    return account, character
+end
 function GetMacroIndexByName(name)
     for index, m in pairs(macros) do if m.name == name then return index end end
     return 0
 end
 function GetMacroInfo(index) local m = macros[index] if m then return m.name, m.icon, m.body end end
 function CreateMacro(name, icon, body, perCharacter)
+    local _, character = GetNumMacros()
+    if character >= CHARACTER_SLOTS then error("Too many macros") end
     local index = 121
     while macros[index] do index = index + 1 end
     macros[index] = {name = name, icon = icon, body = body, perCharacter = perCharacter}
@@ -934,7 +944,7 @@ units.target = nil
 -- Scenarios that need a fresh client each: tests/scenarios/*.lua, each run
 -- in its own process by tests/scenario.lua.
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full"}
+local scenarios = {"renounce", "idle_reset", "idle_pvp_timer", "resurrect_crest", "stale_find", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")

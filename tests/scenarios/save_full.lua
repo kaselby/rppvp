@@ -1,6 +1,7 @@
 -- No free character macro slot: a dialog like the pledge prompt asks for one
--- to be cleared; Retry saves once there's room.
-for i = 1, MAX_CHARACTER_MACROS do macros[120 + i] = {name = "Other" .. i, body = "/dance", perCharacter = true} end
+-- to be cleared; Retry saves once there's room. Full means all of
+-- Forever's slots, not Classic's 18.
+for i = 1, CHARACTER_SLOTS do macros[120 + i] = {name = "Other" .. i, body = "/dance", perCharacter = true} end
 setup()
 event("TIME_PLAYED_MSG", 36000, 600)
 advance(2)
