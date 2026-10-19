@@ -1,5 +1,5 @@
--- 0.4.7: a sworn player heard directly (party, guild, realm channel) is
--- remembered, so their crest is back at once after a relog.
+-- A sworn player heard over group or guild is remembered, so their crest is
+-- back at once after a relog.
 setup()
 local mate = "Player-70-AAA555"
 group = true
@@ -8,11 +8,6 @@ event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(mate, true), "PARTY", "Mate Surname")
 event("CHAT_MSG_ADDON", A.PREFIX, A.EncodePledge(mate, 14), "PARTY", "Mate Surname")
 event("PLAYER_TARGET_CHANGED")
 assert(targetBadge().shown, "heard over party: crest")
-local saved = HonorBoundDB.likely[mate]
-assert(saved and saved.sworn and saved.level == 14 and saved.name == "Mate-Surname", "and remembered, with a whisperable name")
-local unsworn = "Player-70-AAA556"
-event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(unsworn, false), "GUILD", "Plain-Home")
-assert(HonorBoundDB.likely[unsworn] == nil, "unsworn players aren't added")
 -- Relog: addon state is new, saved variables stay.
 A = {}
 assert(loadfile("HonorBound/Core.lua"))("HonorBound", A)

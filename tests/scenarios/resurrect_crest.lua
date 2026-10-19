@@ -1,4 +1,4 @@
--- From Sol's 0.4.4 review.
+-- A renounce heard directly must not come back from the saved status after a reload.
 setup()
 local far = "Player-99-ABC001"
 addon("WQ|1|"..far.."|1|20|0.4.4", "Far-Away")
@@ -9,9 +9,8 @@ group=true
 event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(far, false), "PARTY", "Far-Away")
 event("CHAT_MSG_ADDON", A.PREFIX, A.EncodePledge(far, nil), "PARTY", "Far-Away")
 assert(not targetBadge().shown, "renounced oath received directly over party")
-print("Saved sworn status after direct renounce", HonorBoundDB.likely[far].sworn)
 group=false
--- Reload addon-owned runtime state, preserving SavedVariables and game state.
+-- Reload: addon state is new, saved variables stay.
 A={}
 assert(loadfile("HonorBound/Core.lua"))("HonorBound", A)
 assert(loadfile("HonorBound/Pledge.lua"))("HonorBound", A)
@@ -22,5 +21,4 @@ assert(loadfile("HonorBound/HonorBound.lua"))("HonorBound", A)
 assert(loadfile("HonorBound/Options.lua"))("HonorBound", A)
 events,prompt=frames[1],HonorBoundPrompt
 event("PLAYER_LOGIN")
-print("Crest immediately after reload", targetBadge().shown)
 assert(not targetBadge().shown, "must not resurrect an oath already known to be renounced")
