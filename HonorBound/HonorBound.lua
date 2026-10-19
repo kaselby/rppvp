@@ -23,8 +23,7 @@ local function Debug(text, verbose)
 end
 local SENT, HEARD, FAILED = "|cffffd100Sent|r", "|cff55ff55Heard|r", "|cffff5555Couldn't send|r"
 local ROUTES = {GUILD = "your guild", PARTY = "your party",
-    RAID = "your raid", INSTANCE_CHAT = "your instance group", WHISPER = "a whisper",
-    YELL = "a yell", SAY = "say"}
+    RAID = "your raid", INSTANCE_CHAT = "your instance group"}
 local REASONS = {InvalidPrefix = "the addon's message name isn't registered",
     InvalidMessage = "the message was rejected", AddonMessageThrottle = "sending too fast, the game is throttling us",
     InvalidChatType = "that kind of message isn't allowed here", NotInGroup = "you're not in a group",
@@ -203,7 +202,6 @@ end
 local function PledgePayload()
     return A.EncodePledge(myGUID or "", Sworn() and A.PledgeLevel(char))
 end
-local lastPledgePayload
 Announce = function(force)
     if not db or not myGUID then return end
     local now = GetTime()
