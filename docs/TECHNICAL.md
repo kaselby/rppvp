@@ -42,6 +42,15 @@ status, the old budget applies (burst 5, then one every 2 s). The same page
 warns of an undocumented **server-side** throttle and possible disconnects if
 too much is sent at once, which is what this branch is for testing.
 
+- **Boss encounters:** the game blocks addon messages
+  (`InChatMessagingLockdown`), so nothing is sent at all: not tried, not
+  counted as refused, not retried. Status updates resume once it ends;
+  players seen during the encounter are asked when next seen.
+- **Zoning:** sends during a loading screen (e.g. the Deeprun Tram) are
+  rejected, so nothing is sent from the loading screen until 3 s after
+  arriving (`LOADING_SCREEN_*`, `PLAYER_ENTERING_WORLD`; held at most 60 s if
+  the end is missed). Probes wait too, so nobody is wrongly marked no-addon;
+  the arrival status update goes out once the pause ends.
 - Any refused send (the result code, e.g. "sending too fast, the game is
   throttling us") and the server's own throttle notice are reported in debug
   mode (`/honor debug on`): the first at once, then one summary every 10 s.

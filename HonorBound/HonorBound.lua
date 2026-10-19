@@ -179,7 +179,17 @@ local function ReportRefused(now)
         .. (refused.reported > 0 and (" in the last " .. REFUSED_EVERY .. " s") or "") .. ": " .. table.concat(why, "; ") .. ".")
     refused.count, refused.reasons, refused.reported = 0, {}, now
 end
+-- During boss encounters the game blocks addon messages, and while zoning
+-- (the loading screen and a few seconds after arriving) it rejects them.
+-- Don't even try then: nothing is sent, counted as refused or retried; it
+-- resumes afterwards. A.zonePauseUntil is set by the zoning events.
+A.ZONE_SETTLE = 3
+local function SendingBlocked()
+    if (A.zonePauseUntil or 0) > GetTime() then return true end
+    return C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() and true or false
+end
 local function Send(message, route, target)
+    if SendingBlocked() then return false end
     if route ~= "WHISPER" or Instanced() then
         Refill()
         tokens = math.max(-TOKEN_MAX, tokens - 1)
@@ -225,6 +235,8 @@ Announce = function(force)
     if not force and unchanged and lastAnnounce and now - lastAnnounce < 60 then return end
     -- Nothing got through last time: wait before trying again.
     if now < announceRetryAt then return end
+    -- Not during an encounter or while zoning; it goes out once that's over.
+    if SendingBlocked() then A.announceAfterPause = true return end
     local reached = {}
     local function To(route, target, extra)
         if Send(payload, route, target) and Send(pledgePayload, route, target)
@@ -322,7 +334,7 @@ local function OtherRealm(guid)
     return myServer and Server(guid) ~= myServer
 end
 local function Locked()
-    return C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown()
+    return SendingBlocked()
 end
 local function Between(range)
     return range[1] + math.random() * (range[2] - range[1])
@@ -1728,6 +1740,7 @@ local function OnTooltip(tooltip)
     if Status(unit) then TooltipLines(tooltip, unit) end
 end
 local function TickWork(now)
+    if A.announceAfterPause and not SendingBlocked() then A.announceAfterPause = nil Announce(true) end
     A.TrackPlayed()
     A.CheckPlayedAnswer(now)
     if A.saveSynced and char.sworn and char.verify and now - (A.savedAt or 0) >= A.SAVE_EVERY then A.MarkSave() end
@@ -1963,7 +1976,8 @@ end
 -- and a /reload can land you in combat before PLAYER_LOGIN.
 prompt = CreatePrompt()
 
-for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT", "TIME_PLAYED_MSG", "UPDATE_MACROS"}) do
+for _, event in ipairs({"PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_LOGIN", "PLAYER_LOGOUT", "PLAYER_ENTERING_WORLD", "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UNIT_FACTION", "PLAYER_FLAGS_CHANGED", "GROUP_ROSTER_UPDATE", "CHAT_MSG_ADDON", "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UPDATE_MOUSEOVER_UNIT", "TIME_PLAYED_MSG", "UPDATE_MACROS",
+    "LOADING_SCREEN_ENABLED", "LOADING_SCREEN_DISABLED", "PLAYER_LEAVING_WORLD"}) do
     eventFrame:RegisterEvent(event)
 end
 -- Speakers we might not know yet. Group and guild chat are covered by
@@ -2045,6 +2059,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         A.OnPlayed(...)
     elseif event == "UPDATE_MACROS" then
         A.SyncSave()
+    elseif event == "LOADING_SCREEN_ENABLED" or event == "PLAYER_LEAVING_WORLD" then
+        -- Zoning: hold everything (at most a minute, in case the end is missed).
+        A.zonePauseUntil = GetTime() + 60
+    elseif event == "LOADING_SCREEN_DISABLED" then
+        A.zonePauseUntil = GetTime() + A.ZONE_SETTLE
     elseif idle.events[event] then
         local unit = ...
         if not event:find("^UNIT_") or unit == "player" then idle.Note() end
@@ -2076,6 +2095,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "ADDON_LOADED" then
         if GreyOutDisable() then self:UnregisterEvent("ADDON_LOADED") end
     else
+        if event == "PLAYER_ENTERING_WORLD" then A.zonePauseUntil = GetTime() + A.ZONE_SETTLE end
         if event == "PLAYER_FLAGS_CHANGED" or event == "UNIT_FACTION" or event == "PLAYER_ENTERING_WORLD" then UpdatePrompt() end
         if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_FLAGS_CHANGED" then Announce(true) end
         Refresh()

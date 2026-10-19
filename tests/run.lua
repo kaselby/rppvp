@@ -1057,4 +1057,66 @@ local devText = table.concat(helpLines("devhelp"), "\n")
 check(devText:find("Developer commands:", 1, true) and devText:find("/honor debug verbose", 1, true)
     and devText:find("/honor chatcheck", 1, true) and not devText:find("/honor swear", 1, true), "devhelp lists the developer commands only")
 check(table.concat(helpLines("nonsense"), "\n") == helpText, "an unknown command shows the player help")
+-- Boss encounters: addon messages are blocked, so nothing is even tried.
+SlashCmdList.HONORBOUND("debug on")
+local attempts = 0
+local realSend = C_ChatInfo.SendAddonMessage
+C_ChatInfo.SendAddonMessage = function(...) attempts = attempts + 1 return realSend(...) end
+group, lockdown = true, true
+debugLines = {}
+event("GROUP_ROSTER_UPDATE")
+say("Boss-OtherRealm", "Player-99-0B0551")
+advance(70)
+check(attempts == 0, "no addon message is attempted during an encounter (" .. attempts .. ")")
+local noise = 0
+for _, line in ipairs(debugLines) do if line:find("Rate limited", 1, true) or line:find("Couldn't", 1, true) then noise = noise + 1 end end
+check(noise == 0, "and nothing is reported as refused")
+lockdown = false
+sent = {}
+advance(2)
+local status = 0
+for _, m in ipairs(sent) do if m.route == "PARTY" and m.message:sub(1, 2) == "S|" then status = status + 1 end end
+check(status >= 1, "after the encounter the status goes out again")
+say("Boss-OtherRealm", "Player-99-0B0551")
+advance(1)
+check(#whispers("Boss-OtherRealm") == 1, "and players seen afterwards are asked again")
+C_ChatInfo.SendAddonMessage = realSend
+group = false
+SlashCmdList.HONORBOUND("debug off")
+-- Zoning (Deeprun Tram, any loading screen): nothing is sent until a few
+-- seconds after arriving, and nobody is marked no-addon because of it.
+SlashCmdList.HONORBOUND("debug on")
+local tries = 0
+local sendNow = C_ChatInfo.SendAddonMessage
+C_ChatInfo.SendAddonMessage = function(...) tries = tries + 1 return sendNow(...) end
+group = true
+debugLines, sent = {}, {}
+local rider = "Player-99-07A001"
+say("Rider-OtherRealm", rider)
+event("LOADING_SCREEN_ENABLED")
+advance(5)
+event("LOADING_SCREEN_DISABLED")
+event("PLAYER_ENTERING_WORLD")
+advance(2)
+check(tries == 0, "nothing is attempted while zoning or in the first seconds after (" .. tries .. ")")
+check(not HonorBoundDB.noAddon[rider], "a player seen just before isn't marked no-addon")
+local refusedLines = 0
+for _, line in ipairs(debugLines) do if line:find("Rate limited", 1, true) or line:find("Couldn't send", 1, true) then refusedLines = refusedLines + 1 end end
+check(refusedLines == 0, "and nothing is reported as refused")
+say("Rider-OtherRealm", rider)
+advance(3)
+check(#whispers("Rider-OtherRealm") == 1, "after arriving, probes go out again")
+local arrived = 0
+for _, m in ipairs(sent) do if m.route == "PARTY" and m.message:sub(1, 2) == "S|" then arrived = arrived + 1 end end
+check(arrived >= 1, "and the status update held back on arrival goes out")
+-- A loading screen whose end is never seen can't hold sending for long.
+tries = 0
+event("LOADING_SCREEN_ENABLED")
+advance(61)
+say("Late-Zoner", "Player-99-07A002")
+advance(2)
+check(tries > 0, "sending resumes after a minute even if the loading screen's end is missed")
+C_ChatInfo.SendAddonMessage = sendNow
+group = false
+SlashCmdList.HONORBOUND("debug off")
 print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

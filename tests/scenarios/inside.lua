@@ -37,6 +37,8 @@ sent = {}
 instance = true
 event("PLAYER_ENTERING_WORLD")
 setFlag(false)
+assert(#insides() == 0, "nothing goes out during the arrival pause")
+advance(4)
 assert(#insides("PARTY") >= 1 and insides("PARTY")[1] == "I|1|" .. me .. "|1|" .. A.VERSION, "entering: the party hears we're inside")
 assert(#insides("CHANNEL") == 0, "the realm channel doesn't")
 sent = {}
@@ -45,7 +47,8 @@ assert(#insides("PARTY") >= 1, "and again with each announcement while inside")
 sent = {}
 instance = false
 event("PLAYER_ENTERING_WORLD")
+advance(4)
 assert(#insides("PARTY") == 1 and insides("PARTY")[1]:find("|0|"), "leaving: one message saying we're out")
-advance(70)
+advance(66)
 assert(#insides() == 1, "then nothing more")
 print("inside: ok")
