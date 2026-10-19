@@ -54,6 +54,7 @@ function methods:SetShown(value) self.shown = value and true or false end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false end
 function methods:IsShown() return self.shown end
+function methods:IsVisible() return self.shown ~= false and (not self.parent or not self.parent.IsVisible or self.parent:IsVisible()) end
 function methods:SetScript(event, callback) self.scripts[event] = callback end
 function methods:HookScript(event, callback) self.scripts[event] = callback end
 function methods:HasScript() return true end
@@ -96,8 +97,10 @@ function GetTime() return now end
 function UnitLevel() return 20 end
 function time() return 1000000 + now end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
-function IsInGuild() return false end
-local lockdown, players, systemFilters, channelResult = false, {}, {}, nil
+-- A guild member: status updates go to the guild now that there is no channel.
+local inGuild = true
+function IsInGuild() return inGuild end
+local lockdown, players, systemFilters, channelResult, whisperResult = false, {}, {}, nil, nil
 function UnitIsPlayer(unit) return units[unit] ~= nil end
 function UnitName(unit) return units[unit] and units[unit].name, units[unit] and units[unit].realm end
 function GetPlayerInfoByGUID(guid)
@@ -107,7 +110,11 @@ end
 ChatFrameUtil = { AddSenderNameFilter = function(f) ChatFrameUtil.filter = f end, RemoveSenderNameFilter = function() end }
 ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
 function ChatFrame_AddMessageEventFilter(event, filter) systemFilters[event] = filter end
-function UnitGUID(unit) return units[unit] and units[unit].guid end
+-- Like the game: no unit is a usage error, not nil.
+function UnitGUID(unit)
+    if type(unit) ~= "string" then error("Usage: UnitGUID(unit)", 2) end
+    return units[unit] and units[unit].guid
+end
 function UnitIsPVP(unit) return units[unit] and units[unit].flagged end
 function UnitFactionGroup(unit) return units[unit] and units[unit].faction end
 function GetPVPDesired() return desired end
@@ -123,7 +130,9 @@ C_ChatInfo = {
     InChatMessagingLockdown = function() return lockdown end,
     SendAddonMessage = function(_, message, route, target)
         sent[#sent + 1] = {message = message, route = route, target = target}
-        return (route == "CHANNEL" and channelResult) or 0
+        -- channelResult refuses status routes (group/guild); whisperResult refuses whispers.
+        if route == "WHISPER" then return whisperResult or 0 end
+        return channelResult or 0
     end,
 }
 C_Timer = {
@@ -159,14 +168,14 @@ local function lastSent()
 end
 local playerBadge = function() return PlayerFrame.HonorBoundWidget end
 local targetBadge = function() return TargetFrame.HonorBoundWidget end
-local function peer(sworn) event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, sworn), "CHANNEL", "Surname-bearing Name") end
+local function peer(sworn) event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, sworn), "GUILD", "Surname-bearing Name") end
 
 -- First login, already flagged: offered the oath, no crest yet.
 event("PLAYER_LOGIN")
 check(prompt.shown and prompt.swear.shown, "welcome prompt offers the oath")
 check(not playerBadge().shown, "no crest before swearing")
 advance(18)
-check(connected and lastSent():find("|0|"), "channel connects and announces unsworn")
+check(not connected and lastSent():find("|0|"), "announces unsworn to the guild, and never joins a channel")
 
 -- Swearing while flagged.
 prompt.swear.scripts.OnClick()
@@ -244,7 +253,7 @@ check(not targetBadge().shown, "expire silent peers")
 peer(true)
 check(targetBadge().shown, "returning peer discovered")
 
--- Whisper probes: players from other realms can't hear the channel.
+-- Whisper probes: everyone we see is asked by whisper.
 local far, stranger, silent, spoofed = "Player-99-AAA111", "Player-99-BBB222", "Player-99-CCC333", "Player-99-DDD444"
 local function whispers(to)
     local list = {}
@@ -304,13 +313,22 @@ say("Silent-OtherRealm", silent)
 advance(5)
 check(#whispers("Silent-OtherRealm") == 1, "players without the addon are not asked again")
 
--- Crowd: 80 unknown speakers at once stay within the budget.
+-- Crowd: no pacing outside instances. 80 speakers at once are all asked
+-- within a tick.
 advance(30)
 sent = {}
 for i = 1, 80 do say(("P%d-OtherRealm"):format(i), ("Player-99-%06X"):format(4096 + i)) end
-advance(60)
-local crowd = #whispers()
-check(crowd >= 10 and crowd <= 5 + 60 / 2, "crowd probing stays within the budget; stale probes are dropped (" .. crowd .. ")")
+advance(1)
+check(#whispers() == 80, "every speaker in a crowd is whispered at once (" .. #whispers() .. ")")
+-- /honor rate caps it for testing.
+SlashCmdList.HONORBOUND("rate 5")
+sent = {}
+for i = 1, 30 do say(("R%d-OtherRealm"):format(i), ("Player-99-%06X"):format(8192 + i)) end
+advance(1)
+check(#whispers() == 5, "/honor rate 5 sends at most 5 a second (" .. #whispers() .. ")")
+advance(5)
+check(#whispers() == 30, "and the rest follow (" .. #whispers() .. ")")
+SlashCmdList.HONORBOUND("rate off")
 
 sent = {}
 lockdown = true
@@ -321,102 +339,54 @@ lockdown = false
 advance(2)
 check(#whispers("Late-OtherRealm") == 1, "queued probe goes out after lockdown")
 
--- Realm sharing: finds and non-users go out once on our own channel.
-local function channelPosts(prefix, guid)
+-- Same realm: asked by whisper too, never on a channel.
+local function channelPosts()
     local list = {}
-    for _, m in ipairs(sent) do
-        if m.route == "CHANNEL" and m.message:sub(1, #prefix) == prefix
-            and (not guid or m.message:find(guid, 1, true)) then list[#list + 1] = m end
-    end
+    for _, m in ipairs(sent) do if m.route == "CHANNEL" then list[#list + 1] = m end end
     return list
 end
-local function shared(message, sender) event("CHAT_MSG_ADDON", A.PREFIX, message, "CHANNEL", sender or "Someone-Here") end
-advance(120)
-sent = {}
-local found = "Player-99-ABC001"
-units.mouseover = { guid = found, flagged = true, faction = "Horde", name = "Finder", realm = "Other Realm" }
-event("UPDATE_MOUSEOVER_UNIT")
-advance(2)
-check(#whispers("Finder-OtherRealm") == 1, "probe before sharing")
-addon("WR|1|" .. found .. "|1|30|0.2.0", "Finder-OtherRealm")
-advance(12)
-local posts = channelPosts("F|1|", found)
-check(#posts == 1 and posts[1].message == "F|1|" .. found .. "|Finder-OtherRealm|1|30|0.2.0", "confirmed find shared once on the realm channel")
-check(HonorBoundDB.likely[found] and HonorBoundDB.likely[found].name == "Finder-OtherRealm", "addon users are remembered in saved variables")
-advance(30)
-check(#channelPosts("F|1|", found) == 1, "unchanged finds are not reposted")
-
--- Someone else posts first: we stay quiet.
-sent = {}
-local raced = "Player-99-ABC002"
-addon("WQ|1|" .. raced .. "|1|12|0.2.0", "Racer-OtherRealm")
-shared("F|1|" .. raced .. "|Racer-OtherRealm|1|12|0.2.0")
-advance(15)
-check(#channelPosts("F|1|", raced) == 0, "a find already posted by someone else is not repeated")
-
--- A relayed find shows the badge without a probe of our own.
-sent = {}
-local relayed = "Player-99-ABC003"
-shared("F|1|" .. relayed .. "|Relayed-OtherRealm|1|40|0.2.0")
-units.nameplate1 = { guid = relayed, flagged = true, faction = "Horde", name = "Relayed", realm = "Other Realm" }
-event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-advance(5)
-check(plate.UnitFrame.HonorBoundCrest.shown, "relayed find wears the crest")
-check(#whispers("Relayed-OtherRealm") == 0, "relayed find is not probed")
-units.nameplate1.flagged = false
-event("PLAYER_TARGET_CHANGED")
-check(not plate.UnitFrame.HonorBoundCrest.shown, "relayed status still needs the live PvP flag")
-units.nameplate1.flagged = true
-
--- Players without the addon are batched onto the channel.
-sent = {}
-for i = 1, 3 do say(("Quiet%d-OtherRealm"):format(i), ("Player-99-%06X"):format(0x900 + i)) end
-advance(80)
-local lists = channelPosts("N|1|")
-check(#lists == 1 and lists[1].message:find("99-000901", 1, true) and lists[1].message:find("99-000903", 1, true), "silent players shared in one batch")
-check(HonorBoundDB.noAddon["Player-99-000901"], "silent players remembered in saved variables")
--- Someone else's list stops our probes and our own repeat.
-sent = {}
-shared("N|1|99-000A01,99-000A02")
-say("Listed-OtherRealm", "Player-99-000A01")
-advance(5)
-check(#whispers("Listed-OtherRealm") == 0, "players on a shared no-addon list are not probed")
-shared("N|1|" .. found:sub(8))
-check(HonorBoundDB.noAddon[found] == nil, "a shared list never hides a known addon user")
--- Our own posts come back on the channel: ignore them.
-units.player.name = "Me"
-local before = HonorBoundDB.noAddon["Player-99-000A09"]
-shared("N|1|99-000A09", "Me-HomeRealm")
-check(HonorBoundDB.noAddon["Player-99-000A09"] == before, "own channel echoes are ignored")
-units.player.name = nil
-
--- Channel throttle: sharing pauses, whispers carry on.
-sent = {}
-channelResult = 8
-addon("WQ|1|Player-99-ABC004|1|5|0.2.0", "Thr-OtherRealm")
-advance(12)
-check(#channelPosts("F|1|") == 1, "share attempted once")
-addon("WQ|1|Player-99-ABC005|1|5|0.2.0", "Thr2-OtherRealm")
-advance(60)
-check(#channelPosts("F|1|") == 1, "sharing pauses after a channel throttle")
-check(#whispers("Thr2-OtherRealm") == 1, "whisper replies continue while sharing is paused")
-channelResult = nil
-
--- Same-realm strangers: asked once on the channel, then left alone.
+local function probeSentTo(name)
+    for _ = 1, 5 do
+        if #whispers(name) > 0 then return true end
+        advance(1)
+    end
+end
+advance(200)
 sent = {}
 local neighbour = "Player-70-0BB001"
-units.nameplate1 = { guid = neighbour, flagged = true, faction = "Horde", name = "Neighbour" }
+units.nameplate1 = { guid = neighbour, flagged = true, faction = "Horde", name = "Neighbour", realm = "Home" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-advance(90)
-local asks = channelPosts("Q|1|", neighbour)
-check(#asks == 1, "same-realm stranger asked once (" .. #asks .. ")")
-check(HonorBoundDB.noAddon[neighbour], "silent same-realm stranger goes on the no-addon list")
-check(#channelPosts("N|1|", neighbour:sub(8)) == 0, "same-realm silence is not shared")
-check(#whispers() == 0 or #whispers("Neighbour") == 0, "same-realm strangers are never whispered")
--- Their regular announcement clears the mistake straight away.
-event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(neighbour, true), "CHANNEL", "Neighbour")
+check(probeSentTo("Neighbour-Home"), "a same-realm player is whispered a probe")
+check(#channelPosts() == 0, "nothing is sent on a channel")
+advance(31)
+check(HonorBoundDB.noAddon[neighbour], "a silent same-realm player is marked no-addon")
+-- Their status in the guild clears the mistake straight away.
+event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(neighbour, true), "GUILD", "Neighbour")
 check(HonorBoundDB.noAddon[neighbour] == nil, "hearing a player clears their no-addon entry")
 check(plate.UnitFrame.HonorBoundCrest.shown, "and their crest appears")
+
+-- Rate limits: refused sends are always reported, debug or not.
+debugLines = {}
+whisperResult = 3
+sent = {}
+for i = 1, 5 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
+advance(1)
+local function limited()
+    local list = {}
+    for _, line in ipairs(debugLines) do if line:find("Rate limited", 1, true) then list[#list + 1] = line end end
+    return list
+end
+check(#limited() == 1 and limited()[1]:find("5 messages refused: sending too fast", 1, true), "refused whispers are reported at once: " .. tostring(limited()[1]))
+for i = 6, 9 do say(("T%d-OtherRealm"):format(i), ("Player-99-%06X"):format(12288 + i)) end
+advance(3)
+check(#limited() == 1, "further refusals wait for the next summary")
+advance(8)
+check(#limited() == 2 and limited()[2]:find("4 messages refused in the last 10 s", 1, true), "then one summary: " .. tostring(limited()[2]))
+whisperResult = nil
+ERR_CHAT_THROTTLED = "You are sending too many messages."
+check(systemFilters.CHAT_MSG_SYSTEM(nil, "CHAT_MSG_SYSTEM", ERR_CHAT_THROTTLED) == nil, "the server's own throttle notice stays visible")
+advance(11)
+check(#limited() == 3 and limited()[3]:find("server says we're sending too fast", 1, true), "and is counted as a rate limit: " .. tostring(limited()[3]))
 
 -- Chat names wear the same faction crest as frames and nameplates.
 local function chatName(factionOf, name)
@@ -460,37 +430,22 @@ local simChat = chatCrest(simmed, "Simmy")
 check(simChat and simChat:find("CrestHorde.tga", 1, true), "simulated user's crest shows in chat")
 check(HonorBoundDB.likely[simmed] == nil, "simulated users are never saved")
 advance(12)
-check(#channelPosts("FS|1|", simmed) == 1 and #channelPosts("F|1|", simmed) == 0, "simulated finds go out as tester-only FS, never F")
+check(#channelPosts() == 0, "simulated answers aren't shared on any channel")
 check(A.SimHash(simmed) == A.SimHash(simmed) and A.SimHash(simmed) >= 0 and A.SimHash(simmed) < 100, "fixed verdict per player")
 local under = 0
 for i = 1, 2000 do if A.SimHash(("Player-99-%08X"):format(i * 7919)) < 10 then under = under + 1 end end
 check(under > 120 and under < 280, "about 10% of players fall under 10 (" .. under .. ")")
 
--- Another tester's FS: taken only when our own hash agrees.
-local relayedSim = "Player-99-5AA002"
-shared("FS|1|" .. relayedSim .. "|Relay-OtherRealm|1|0|sim")
-units.nameplate1 = { guid = relayedSim, flagged = false, faction = "Horde", name = "Relay", realm = "Other Realm" }
-event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-advance(5)
-check(crest.shown and not crest.desaturated and #whispers("Relay-OtherRealm") == 0, "another tester's FS gives a crest without a probe")
--- An N list never hides a player we're simulating.
-local listed = "Player-99-5AA003"
-shared("N|1|" .. listed:sub(8))
-check(HonorBoundDB.noAddon[listed] == nil, "shared no-addon list can't hide a simulated user")
-
 -- 0%: no fakes, and the no-addon path is exactly the real one.
 sent = {}
 SlashCmdList.HONORBOUND("sim 0")
 local plain = "Player-99-5AA004"
-shared("FS|1|" .. plain .. "|Plain-OtherRealm|1|0|sim")
 units.nameplate1 = { guid = plain, flagged = false, faction = "Horde", name = "Plain", realm = "Other Realm" }
 event("NAME_PLATE_UNIT_ADDED", "nameplate1")
-check(probeSent("Plain-OtherRealm"), "FS for a player our hash rejects is ignored, so we probe")
+check(probeSent("Plain-OtherRealm"), "a player outside the simulated share is probed")
 advance(31)
 check(crest.shown and crest.desaturated and crest.tint[1] < 0.5 and crest.tint[1] == crest.tint[2], "dark grey crest once marked no-addon")
 check(HonorBoundDB.noAddon[plain], "no-addon still saved while simulating")
-advance(45)
-check(#channelPosts("N|1|", plain:sub(8)) == 1, "no-addon still shared while simulating")
 
 -- Off: simulated crests go, real knowledge stays.
 SlashCmdList.HONORBOUND("sim 100")
@@ -500,9 +455,6 @@ advance(1)
 SlashCmdList.HONORBOUND("sim off")
 check(not crest.shown, "sim off removes simulated crests")
 check(HonorBoundDB.noAddon[plain], "sim off keeps saved no-addon entries")
-sent = {}
-shared("FS|1|" .. relayedSim .. "|Relay-OtherRealm|1|0|sim")
-check(#sent == 0, "clients not simulating ignore FS")
 
 -- Same budget with or without simulation.
 local function crowdWhispers(percent)
@@ -514,7 +466,7 @@ local function crowdWhispers(percent)
     return #whispers()
 end
 local off, on = crowdWhispers(nil), crowdWhispers(100)
-check(on <= 5 + 60 / 2 and on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
+check(on <= off + 2, "simulation sends no more whispers than real (" .. off .. " vs " .. on .. ")")
 SlashCmdList.HONORBOUND("sim off")
 
 -- Simulated users already on the no-addon list still get asked and answer.
@@ -619,9 +571,7 @@ debugLines = {}
 SlashCmdList.HONORBOUND("debug verbose")
 players["Player-99-DB0001"] = { name = "Readable", realm = "Other Realm" }
 addon("WQ|1|Player-99-DB0001|1|12|0.3.1", "Readable-OtherRealm")
-shared("F|1|Player-99-DB0002|Sharer-OtherRealm|1|30|0.3.1")
-shared("N|1|99-DB0003,99-DB0004")
-event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, true), "CHANNEL", "Neighbour")
+event("CHAT_MSG_ADDON", A.PREFIX, A.Encode(other, true), "GUILD", "Neighbour")
 units.mouseover = { guid = "Player-99-DB0005", flagged = true, faction = "Horde", name = "Quiet", realm = "Other Realm" }
 event("UPDATE_MOUSEOVER_UNIT")
 channelResult = 8
@@ -662,6 +612,15 @@ function IsInInstance() return instance, instance and "party" or "none" end
 function GetCVarBool(name) return name == "ActionButtonUseKeyDown" end
 ActionButton1, ActionButton2, BT4Button3 = object("ActionButton1"), object("ActionButton2"), object("BT4Button3")
 StanceButton1 = object("StanceButton1")
+-- Inside dungeons and raids the client's whisper limit applies: paced again.
+instance = true
+advance(30)
+sent = {}
+for i = 1, 20 do say(("D%d-OtherRealm"):format(i), ("Player-99-%06X"):format(16384 + i)) end
+advance(1)
+check(#whispers() >= 1 and #whispers() <= 6, "inside an instance whispers are paced (" .. #whispers() .. " in a second)")
+instance = false
+advance(31)
 -- The click overlays: secure buttons whose macro is set per mouse button.
 local function overlays()
     local found = {}
@@ -942,4 +901,93 @@ for _, name in ipairs(scenarios) do
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
 end
 
-print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes, realm sharing, same-realm queries, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")
+-- /honor why explains a missing nameplate crest.
+local function why()
+    debugLines = {}
+    SlashCmdList.HONORBOUND("why")
+    return table.concat(debugLines, "\n"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+end
+SlashCmdList.HONORBOUND("sim 100")
+local shown = "Player-99-0EE001"
+units.target = { guid = shown, flagged = false, faction = units.player.faction, name = "Shown", realm = "Other Realm" }
+units.nameplate1 = units.target
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+advance(5)
+local report = why()
+check(report:find("Known addon user: yes (simulated)", 1, true) and report:find("Should wear a crest: yes", 1, true)
+    and report:find("showing: yes", 1, true), "why: a simulated user's crest is accounted for:\n" .. report)
+plate.UnitFrame.shown = false
+IsAddOnLoaded = function(name) return name == "Plater" end
+report = why()
+check(report:find("Blizzard nameplate frame visible: no", 1, true) and report:find("Plater", 1, true)
+    and report:find("hiding Blizzard's nameplate", 1, true), "why: a nameplate addon hiding the crest is named:\n" .. report)
+plate.UnitFrame.shown, IsAddOnLoaded = true, nil
+SlashCmdList.HONORBOUND("sim off")
+units.target = { guid = "Player-99-0EE002", flagged = true, faction = units.player.faction, name = "Fresh", realm = "Other Realm" }
+report = why()
+check(report:find("Known addon user: no", 1, true), "why: an unknown player is reported as not known yet:\n" .. report)
+units.target = nil
+-- Nameplates the game never announced are still picked up, and one
+-- nameplate failing doesn't stop the others.
+SlashCmdList.HONORBOUND("sim 100")
+local plate2, plate3 = object(), object()
+plate2.UnitFrame, plate3.UnitFrame = object(), object()
+plate2.UnitFrame.name, plate3.UnitFrame.name = object(), object()
+plate2.namePlateUnitToken, plate3.namePlateUnitToken = "nameplate2", "nameplate3"
+local realPlates = C_NamePlate
+C_NamePlate = {
+    GetNamePlateForUnit = function(unit)
+        if unit == "nameplate3" then error("broken plate") end
+        return (unit == "nameplate1" and plate) or (unit == "nameplate2" and plate2) or nil
+    end,
+    GetNamePlates = function() return {plate2, plate3} end,
+}
+units.nameplate2 = { guid = "Player-99-0EE101", flagged = false, faction = units.player.faction, name = "Unannounced", realm = "Other Realm" }
+units.nameplate3 = { guid = "Player-99-0EE102", flagged = false, faction = units.player.faction, name = "Broken", realm = "Other Realm" }
+debugLines = {}
+advance(5) -- no NAME_PLATE_UNIT_ADDED for either
+check(plate2.UnitFrame.HonorBoundCrest and plate2.UnitFrame.HonorBoundCrest.shown, "an unannounced nameplate still gets its crest")
+local reported = 0
+for _, line in ipairs(debugLines) do if line:find("Couldn't update a nameplate crest", 1, true) then reported = reported + 1 end end
+check(reported == 1, "a failing nameplate is reported once, not every second (" .. reported .. ")")
+C_NamePlate = realPlates
+units.nameplate2, units.nameplate3 = nil, nil
+event("NAME_PLATE_UNIT_REMOVED", "nameplate2")
+event("NAME_PLATE_UNIT_REMOVED", "nameplate3")
+SlashCmdList.HONORBOUND("sim off")
+-- Debug mode with Blizzard's empty party frames (not in a party): a frame
+-- with no unit must not stop nameplates from updating.
+PartyFrame = {}
+for i = 1, 4 do
+    local member = object("PartyMemberFrame" .. i)
+    member.shown, member.unit = false, nil
+    PartyFrame["MemberFrame" .. i] = member
+end
+SlashCmdList.HONORBOUND("debug on")
+local asked = "Player-99-0EE201"
+units.nameplate1 = { guid = asked, flagged = true, faction = units.player.faction, name = "Asked", realm = "Other Realm" }
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+local crestNow = plate.UnitFrame.HonorBoundCrest
+check(not crestNow.shown, "a stranger's nameplate starts without a crest")
+advance(2)
+check(crestNow.shown and crestNow.desaturated and crestNow.tint[2] == 1, "with empty party frames, the nameplate still turns light grey once they're being asked")
+SlashCmdList.HONORBOUND("debug off")
+PartyFrame = nil
+-- A failure in the once-a-second work never stops the redraw.
+SlashCmdList.HONORBOUND("debug on")
+local ruledLater = "Player-99-0EE301"
+units.nameplate1 = { guid = ruledLater, flagged = false, faction = units.player.faction, name = "Later", realm = "Other Realm" }
+local realLockdown = C_ChatInfo.InChatMessagingLockdown
+C_ChatInfo.InChatMessagingLockdown = function() error("broken tick") end
+event("NAME_PLATE_UNIT_ADDED", "nameplate1")
+HonorBoundDB.noAddon[ruledLater] = time() + 7200 -- learned after the nameplate appeared
+debugLines = {}
+advance(2)
+local tickReported = 0
+for _, line in ipairs(debugLines) do if line:find("Couldn't update discovery (", 1, true) then tickReported = tickReported + 1 end end
+check(tickReported == 1, "a broken tick is reported once (" .. tickReported .. ")")
+local later = plate.UnitFrame.HonorBoundCrest
+check(later.shown and later.desaturated and later.tint[1] < 0.5, "the nameplate still redraws (dark grey) while the tick is broken")
+C_ChatInfo.InChatMessagingLockdown = realLockdown
+SlashCmdList.HONORBOUND("debug off")
+print("Passed " .. assertions .. " assertions: protocol, oath, grace, peer flag checks, crest placement, nameplates, settings, whisper probes to everyone, rate-limit reports, chat crests, simulation, readable debug, reflag keys and click overlays; scenarios: " .. table.concat(scenarios, ", ") .. ".")

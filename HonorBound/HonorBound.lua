@@ -20,8 +20,8 @@ local MEDIA = "Interface\\AddOns\\HonorBound\\Media\\"
 local eventFrame = CreateFrame("Frame")
 local db, char, myGUID, myServer, lastAnnounce, lastPayload, lastPledgePayload
 local announceRetryAt = 0
-local peers, queries, widgets, plates = {}, {}, {}, {}
-local lastQuery, lastAnswer, lastJoin, lastMinute = -100, -100, -100, 0
+local peers, widgets, plates = {}, {}, {}
+local lastAnswer, lastMinute = -100, 0
 local guarded, deadline, prompt, promptAfterCombat
 local Refresh, Announce, UpdatePrompt, RefreshPlate
 
@@ -29,7 +29,7 @@ local function Print(text)
     DEFAULT_CHAT_FRAME:AddMessage("|cffffd479HonorBound:|r " .. text)
 end
 -- Session-only diagnostics: no extra network traffic or saved logs.
--- "on" shows broadcasts, channel shares and a summary a minute; "verbose"
+-- "on" shows status updates, failures and a summary a minute; "verbose"
 -- adds every whisper probe and reply.
 local debugEnabled, debugVerbose = false, false
 local function Debug(text, verbose)
@@ -79,6 +79,7 @@ local function Secret(value)
     return issecretvalue and issecretvalue(value)
 end
 local function GUID(unit)
+    if type(unit) ~= "string" then return end
     local value = UnitGUID(unit)
     if Secret(value) or not A.ValidGUID(value) then return end
     return value
@@ -139,15 +140,12 @@ local function FormatTime(seconds)
 end
 
 ---------------------------------------------------------------------------
--- Sharing status over the hidden channel and group addon messages.
+-- Status updates go to the group and guild; everyone else is reached by
+-- whisper. No hidden channel.
 
-local function ChannelID()
-    local id = GetChannelName(A.CHANNEL)
-    if type(id) == "number" and id > 0 then return id end
-end
--- One budget for every send. Announcements always go out but still spend;
--- queries and whisper probes wait until there's room. Sustained use stays
--- at half the server's roughly one-message-a-second allowance per prefix.
+-- The client's per-prefix allowance (10, refilling 1 a second) doesn't apply
+-- to whispers outside instanced content, so whispers go out unpaced there.
+-- Inside dungeons and raids, and for group/guild messages, keep this budget.
 local TOKEN_MAX, TOKEN_RATE = 5, 0.5
 local tokens, tokenTime = TOKEN_MAX, 0
 local function Refill()
@@ -159,14 +157,41 @@ local function Afford(cost)
     Refill()
     return tokens >= cost
 end
+local function Instanced()
+    if not IsInInstance then return false end
+    local inside = IsInInstance()
+    return inside and true or false
+end
+-- Refused sends are always reported, debug or not: the first at once, then
+-- one summary every 10 s so a burst doesn't flood chat.
+local REFUSED_EVERY = 10
+local refused = {count = 0, reasons = {}, reported = -100}
+local function NoteRefused(reason)
+    refused.count = refused.count + 1
+    refused.reasons[reason] = (refused.reasons[reason] or 0) + 1
+end
+local function ReportRefused(now)
+    if refused.count == 0 or now - refused.reported < REFUSED_EVERY then return end
+    local why = {}
+    for reason, n in pairs(refused.reasons) do why[#why + 1] = reason .. (n > 1 and (" ×" .. n) or "") end
+    table.sort(why)
+    Print("|cffff5555Rate limited:|r " .. Count(refused.count, "message") .. " refused"
+        .. (refused.reported > 0 and (" in the last " .. REFUSED_EVERY .. " s") or "") .. ": " .. table.concat(why, "; ") .. ".")
+    refused.count, refused.reasons, refused.reported = 0, {}, now
+end
 local function Send(message, route, target)
-    Refill()
-    tokens = math.max(-TOKEN_MAX, tokens - 1)
+    if route ~= "WHISPER" or Instanced() then
+        Refill()
+        tokens = math.max(-TOKEN_MAX, tokens - 1)
+    end
     local result = C_ChatInfo.SendAddonMessage(A.PREFIX, message, route, target)
-    -- The server pushed back: stop optional traffic for a few seconds.
-    if not (result == true or result == 0) then tokens = math.min(tokens, -2) end
+    local ok = result == true or result == 0
+    if not ok then
+        -- The client pushed back: stop optional group/guild traffic for a moment.
+        tokens = math.min(tokens, -2)
+        NoteRefused(Reason(result))
+    end
     if debugEnabled then
-        local ok = result == true or result == 0
         local where = route == "WHISPER" and ("a whisper to " .. tostring(target)) or ROUTES[route] or route
         -- Failures always show; every successful send only in verbose.
         if ok then
@@ -175,7 +200,7 @@ local function Send(message, route, target)
             Debug(FAILED .. " " .. Describe(message) .. " via " .. where .. ": " .. Reason(result) .. ".")
         end
     end
-    return result == true or result == 0
+    return ok
 end
 local function GroupRoute()
     if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
@@ -194,12 +219,11 @@ Announce = function(force)
     local inside = InPausedInstance()
     -- Include metadata changes in the existing announcement throttle.
     local unchanged = payload == lastPayload and pledgePayload == lastPledgePayload and inside == groupInside.told
-    -- Keep repeated world/group events from flooding the channel,
+    -- Keep repeated world/group events from flooding the group,
     -- but let a changed oath through straight away.
     if unchanged and lastAnnounce and now - lastAnnounce < 3 then return end
     if not force and unchanged and lastAnnounce and now - lastAnnounce < 60 then return end
-    -- Nothing got through last time: wait before trying again, rather than
-    -- hammering a busy channel every second.
+    -- Nothing got through last time: wait before trying again.
     if now < announceRetryAt then return end
     local reached = {}
     local function To(route, target, extra)
@@ -208,8 +232,6 @@ Announce = function(force)
             reached[#reached + 1] = ROUTES[route]
         end
     end
-    local channel = ChannelID()
-    if channel then To("CHANNEL", tostring(channel)) end
     -- The group hears whether we're inside: while we are, and once more
     -- when we come out.
     if GroupRoute() then To(GroupRoute(), nil, (inside or groupInside.told) and A.EncodeInside(myGUID, inside)) end
@@ -218,63 +240,33 @@ Announce = function(force)
     if #reached > 0 then
         lastAnnounce, lastPayload, lastPledgePayload, groupInside.told = now, payload, pledgePayload, inside
         Debug(SENT .. " your status (" .. mine .. ") to " .. table.concat(reached, ", ") .. ".")
-    elseif channel or GroupRoute() or IsInGuild() then
-        -- Sends were refused: back off. With nowhere to send yet, nothing is
-        -- sent either, so keep checking every second.
+    elseif GroupRoute() or IsInGuild() then
         announceRetryAt = now + 10
         Debug("Couldn't announce your status (" .. mine .. "). Trying again in 10 s.")
     end
 end
-local function JoinChannel()
-    if not db or GetTime() - lastJoin < 30 then return end
-    lastJoin = GetTime()
-    if ChannelID() then Announce(true) return end
-    local join = JoinTemporaryChannel or JoinPermanentChannel
-    if join then join(A.CHANNEL) end
-    C_Timer.After(2, function()
-        if ChatFrame_RemoveChannel then
-            for i = 1, NUM_CHAT_WINDOWS or 10 do
-                local frame = _G["ChatFrame" .. i]
-                if frame then ChatFrame_RemoveChannel(frame, A.CHANNEL) end
-            end
-        end
-        Announce(true)
-    end)
-end
 ---------------------------------------------------------------------------
--- Whisper probes: players from other realms can't hear our hidden channel,
--- so ask the ones we actually meet (mouseover, nameplate, chat) directly.
--- A probe carries our own status, so the other side learns us from it and
--- never needs to probe back. One reply completes the exchange.
---
--- Realm sharing: whatever one of us learns about another realm's players is
--- posted once on our own realm's channel, so nobody else here has to ask.
--- Finds ("F") go out after a short random wait unless someone beat us to it;
--- players without the addon ("N") go out in small batches, and the more
--- of us there are, the less often each one posts.
+-- Whisper probes: everyone we see (nameplates, mouseover, target, chat) is
+-- asked directly, same realm or not. A probe carries our own status, so the
+-- other side learns us from it and never needs to probe back. One reply
+-- completes the exchange.
 
 local PROBE_TIMEOUT = 30         -- no reply by then: treat as no addon
-local PROBE_STALE = 30           -- queued this long without sending: drop
+local PROBE_STALE = 30           -- queued this long without sending (instances only): drop
 local NO_ADDON = 7200            -- our own silent probe: don't ask for 2 hours
-local NO_ADDON_SHARED = 1800     -- someone else's: 30 minutes
 local LIKELY_KEEP = 14 * 86400   -- remember addon users for two weeks
 -- Refresh peers still in view well before they expire: REPROBE_AFTER plus up
--- to REPROBE_JITTER spreads a realm out, and the rest leaves room for the queue.
+-- to REPROBE_JITTER spreads re-checks out.
 local REPROBE_AFTER, REPROBE_JITTER = A.TTL - 90, 45
-local QUEUE_MAX, REPLY_MAX, REPLY_GAP = 40, 20, 60
-local SHARE_WAIT, SHARE_STALE, SHARE_REFRESH = {2, 10}, 60, 150
-local NO_BATCH, NO_GAP, NO_MAX = 15, {20, 40}, 60
+local QUEUE_MAX, REPLY_MAX, REPLY_GAP = 500, 200, 60
 -- Lower sends first: known addon users, mouseover/target, chat, nameplates.
 local PRIORITY_LIKELY, PRIORITY_UNIT, PRIORITY_CHAT, PRIORITY_PLATE = 0, 1, 2, 3
 local probes, probeCount, pending, replies, replied = {}, 0, {}, {}, {}
 local noAddon, likely = {}, {}  -- saved; keyed by GUID, times from time()
-local names, jitter, heard, shares = {}, {}, {}, {}
-local unsharedNo, nextNoPost, sharingPausedUntil = {}, 0, 0
--- Same-realm players asked on the channel and not yet heard from.
-local ASK_TIMEOUT = 10
-local asking = {}
-local stats = {asked = 0, askedSilent = 0, probed = 0, answered = 0, silent = 0, unreachable = 0,
-    sharedF = 0, sharedN = 0, heardF = 0, heardN = 0}
+local names, jitter = {}, {}
+-- Optional pacing for testing: whispers per second, nil = unlimited.
+local whisperCap
+local stats = {probed = 0, answered = 0, silent = 0, unreachable = 0}
 
 -- Simulation (/honor sim N): N% of the players we ask pretend to have the
 -- addon and answer quickly. Everything else stays real: probes, budget,
@@ -429,22 +421,17 @@ end
 local function ChatChanged(guid)
     if A.RefreshChatFor then A.RefreshChatFor(guid) end
 end
--- A simulated user answering our probe or question. Only resolves if we're
--- still waiting: a real reply, an unreachable error or a timeout wins.
+-- A simulated user answering our probe. Only resolves if we're still
+-- waiting: a real reply, an unreachable error or a timeout wins.
 local function SimAnswer(guid, name)
-    if not simPercent or not (pending[guid] or asking[guid]) then return end
-    pending[guid], asking[guid] = nil, nil
+    if not simPercent or not pending[guid] then return end
+    pending[guid] = nil
     local now = GetTime()
     stats.answered = stats.answered + 1
     peers[guid] = {sworn = true, version = "sim", simulated = true, seen = now}
     Debug(HEARD .. " a simulated answer from " .. (name or Who(guid)) .. ".", true)
     TimeResult("answer", guid)
     ChatChanged(guid)
-    -- Tell other testers on our realm (FS: ignored by everyone not simulating).
-    if OtherRealm(guid) and ValidName(name) and not shares[guid] then
-        shares[guid] = {due = now + Between(SHARE_WAIT), peer = peers[guid],
-            payload = ("FS|1|%s|%s|1|0|sim"):format(guid, name)}
-    end
     Refresh()
 end
 local function SimProbe(guid, name)
@@ -457,7 +444,7 @@ end
 local function Probe(guid, priority, name)
     local now = GetTime()
     local peer = peers[guid]
-    -- Spread re-probes so a whole realm doesn't refresh the same player at once.
+    -- Spread re-probes so everyone doesn't refresh the same player at once.
     jitter[guid] = jitter[guid] or math.random(0, REPROBE_JITTER)
     if peer and now - peer.seen < REPROBE_AFTER + jitter[guid] then return end
     if pending[guid] or RuledOut(guid) then return end
@@ -470,74 +457,26 @@ local function Probe(guid, priority, name)
         entry.name = entry.name or name
         return
     end
-    if probeCount >= QUEUE_MAX then
-        -- Full: a more urgent probe displaces the least urgent, oldest one.
-        local worst, worstEntry
-        for queued, e in pairs(probes) do
-            if not worstEntry or e.priority > worstEntry.priority
-                or (e.priority == worstEntry.priority and e.at < worstEntry.at) then
-                worst, worstEntry = queued, e
-            end
-        end
-        if worstEntry.priority <= priority then return end
-        probes[worst], probeCount = nil, probeCount - 1
-    end
+    if probeCount >= QUEUE_MAX then return end
     probes[guid], probeCount = {priority = priority, at = now, name = name}, probeCount + 1
 end
 local function Unqueue(guid)
     if probes[guid] then probes[guid], probeCount = nil, probeCount - 1 end
 end
--- Same-realm players hear the channel: ask there. Anyone else gets a probe.
+-- Everyone gets a whisper probe, same realm or not.
 local function Query(guid, priority, name)
     if not guid or not myGUID or guid == myGUID then return end
-    if OtherRealm(guid) then return Probe(guid, priority or PRIORITY_PLATE, name) end
-    -- Ask each same-realm stranger once; silence puts them on the list.
-    if asking[guid] or RuledOut(guid) then return end
-    local now = GetTime()
-    if peers[guid] and now - peers[guid].seen < 60 then return end
-    Seen(guid)
-    if now - lastQuery < 1 then return end
-    if queries[guid] and now - queries[guid] < 15 then return end
-    local id, route = ChannelID(), GroupRoute()
-    local cost = (id and 1 or 0) + (route and 1 or 0) + (IsInGuild() and 1 or 0)
-    if cost == 0 or not Afford(cost) then return end
-    local message = "Q|1|" .. guid
-    local sent = false
-    if id then sent = Send(message, "CHANNEL", tostring(id)) or sent end
-    if route then sent = Send(message, route) or sent end
-    if IsInGuild() then sent = Send(message, "GUILD") or sent end
-    if sent then
-        queries[guid], lastQuery, asking[guid] = now, now, now
-        stats.asked = stats.asked + 1
-        ChatChanged(guid)
-        SimProbe(guid)
-    end
+    return Probe(guid, priority or PRIORITY_PLATE, name)
 end
 local function QueryUnit(unit, priority)
     local guid = GUID(unit)
     if not guid or guid == myGUID or not UnitIsPlayer(unit) then return end
-    if OtherRealm(guid) then
-        -- Whispers can't cross factions; skip anyone we couldn't reach anyway.
-        local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
-        if Secret(theirs) or Secret(ours) or theirs ~= ours then return end
-    end
+    -- Whispers can't cross factions; skip anyone we couldn't reach anyway.
+    local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+    if Secret(theirs) or Secret(ours) or theirs ~= ours then return end
     Query(guid, priority, FullName(UnitName(unit)))
 end
 
--- A player from another realm confirmed by us: tell our realm, unless the
--- news is already out.
-local function ShareFound(guid, name, peer)
-    if not OtherRealm(guid) or not ValidName(name) then return end
-    local record = heard[guid]
-    if SameStatus(record, peer) and GetTime() - record.at < SHARE_REFRESH then
-        -- The realm already has this news; anything we queued is older.
-        shares[guid] = nil
-        return
-    end
-    -- Already queued: keep its place in line, but share the newest status.
-    local due = shares[guid] and shares[guid].due or GetTime() + Between(SHARE_WAIT)
-    shares[guid] = {due = due, payload = FoundPayload(guid, name, peer), peer = peer}
-end
 local function MarkNoAddon(guid, why)
     -- A remembered user gets a second chance: one dropped whisper shouldn't
     -- hide a crest. The next sighting asks again.
@@ -549,18 +488,18 @@ local function MarkNoAddon(guid, why)
     end
     noAddon[guid] = time() + NO_ADDON
     likely[guid] = nil
-    if OtherRealm(guid) and #unsharedNo < NO_MAX then
-        -- Start a batch: collect for a while before posting.
-        if #unsharedNo == 0 then nextNoPost = math.max(nextNoPost, GetTime() + Between(NO_GAP)) end
-        unsharedNo[#unsharedNo + 1] = guid
-    end
     stats[why] = stats[why] + 1
     TimeResult("none", guid)
     ChatChanged(guid)
 end
 
--- At most one whisper a second, and only while the shared budget allows.
--- Replies go first: someone is waiting on them.
+-- Whether another whisper may go out this tick: unlimited outside instances
+-- unless /honor rate sets a cap; inside, the client's budget applies.
+local function MayWhisper(sentThisTick)
+    if Instanced() then return Afford(1) end
+    return not whisperCap or sentThisTick < whisperCap
+end
+-- Every tick: all waiting replies, then every queued probe, most urgent first.
 local function PumpWhispers(now)
     for guid, p in pairs(pending) do
         if now - p.at > PROBE_TIMEOUT then
@@ -569,86 +508,45 @@ local function PumpWhispers(now)
             Debug("No answer from " .. p.name .. " after " .. PROBE_TIMEOUT .. " s: marked as not having the addon for 2 hours.", true)
         end
     end
+    local sent = 0
     while replies[1] and now - replies[1].at > PROBE_STALE do table.remove(replies, 1) end
-    if not Afford(1) then return end
-    local reply = table.remove(replies, 1)
-    if reply then
+    while replies[1] and MayWhisper(sent) do
+        local reply = table.remove(replies, 1)
         replied[reply.name] = now
         Send(WhisperPayload("R"), "WHISPER", reply.name)
-        return
+        sent = sent + 1
     end
-    -- Most urgent first; ties broken at random so players on the same realm
-    -- spread out over a crowd instead of all asking the same stranger.
-    local best, bestEntry, ties = nil, nil, 0
+    local order = {}
     for guid, e in pairs(probes) do
         if now - e.at > PROBE_STALE then
             probes[guid], probeCount = nil, probeCount - 1
-        elseif not bestEntry or e.priority < bestEntry.priority then
-            best, bestEntry, ties = guid, e, 1
-        elseif e.priority == bestEntry.priority then
-            ties = ties + 1
-            if math.random(ties) == 1 then best, bestEntry = guid, e end
+        else
+            order[#order + 1] = {guid = guid, e = e, tie = math.random()}
         end
     end
-    if not best then return end
-    Unqueue(best)
-    local name = bestEntry.name or GuidName(best)
-    if not name then return end -- not resolvable yet; the next sighting re-queues
-    pending[best] = {at = now, name = name}
-    stats.probed = stats.probed + 1
-    Send(WhisperPayload("Q"), "WHISPER", name)
-    ChatChanged(best)
-    SimProbe(best, name)
-end
--- Channel posts are optional: they wait for spare budget and back off when
--- the server pushes back.
-local function PumpShares(now)
-    local id = ChannelID()
-    if not id or now < sharingPausedUntil then return end
-    for guid, s in pairs(shares) do
-        if now - s.due > SHARE_STALE then shares[guid] = nil end
-    end
-    if not Afford(2) then return end
-    for guid, s in pairs(shares) do
-        if now >= s.due then
-            shares[guid] = nil
-            heard[guid] = {at = now, sworn = s.peer.sworn, level = s.peer.pledgedSinceLevel or 0}
-            if Send(s.payload, "CHANNEL", tostring(id)) then
-                stats.sharedF = stats.sharedF + 1
-                Debug(SENT .. " to your realm: " .. Describe(s.payload):gsub("^a ", "") .. ".")
-            else
-                sharingPausedUntil = now + 120
-                Debug("Sharing paused for 2 minutes while the channel is busy.")
-            end
-            return
+    table.sort(order, function(a, b)
+        if a.e.priority ~= b.e.priority then return a.e.priority < b.e.priority end
+        return a.tie < b.tie
+    end)
+    for _, item in ipairs(order) do
+        if not MayWhisper(sent) then return end
+        local guid, e = item.guid, item.e
+        Unqueue(guid)
+        local name = e.name or GuidName(guid)
+        if name then -- not resolvable yet: the next sighting re-queues
+            pending[guid] = {at = now, name = name}
+            stats.probed = stats.probed + 1
+            Send(WhisperPayload("Q"), "WHISPER", name)
+            sent = sent + 1
+            ChatChanged(guid)
+            SimProbe(guid, name)
         end
-    end
-    if #unsharedNo == 0 or now < nextNoPost then return end
-    local batch = {}
-    while #batch < NO_BATCH and unsharedNo[1] do
-        batch[#batch + 1] = table.remove(unsharedNo, 1):sub(8) -- drop "Player-"
-    end
-    nextNoPost = now + Between(NO_GAP)
-    if Send("N|1|" .. table.concat(batch, ","), "CHANNEL", tostring(id)) then
-        stats.sharedN = stats.sharedN + 1
-        Debug(SENT .. " to your realm: " .. Count(#batch, "player") .. " without the addon.")
-    else
-        sharingPausedUntil = now + 120
-        Debug("Sharing paused for 2 minutes while the channel is busy.")
     end
 end
 local function PumpProbes()
     local now = GetTime()
-    for guid, at in pairs(asking) do
-        if now - at > ASK_TIMEOUT then
-            asking[guid] = nil
-            MarkNoAddon(guid, "askedSilent")
-            Debug(Who(guid) .. " (your realm) didn't answer within " .. ASK_TIMEOUT .. " s: marked as not having the addon.", true)
-        end
-    end
     if Locked() or not myGUID then return end
     PumpWhispers(now)
-    PumpShares(now)
 end
 
 local function OnWhisper(message, sender)
@@ -673,7 +571,6 @@ local function OnWhisper(message, sender)
     if ValidName(name) then likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil,
         level = peer.pledgedSinceLevel} end
     Unqueue(guid)
-    ShareFound(guid, name, peer)
     ChatChanged(guid)
     -- Always answer a probe, even with ours in flight: ours may never arrive.
     local queued = false
@@ -684,85 +581,18 @@ local function OnWhisper(message, sender)
     end
     Refresh()
 end
--- Shared on our channel by someone on our realm.
-local function OnShare(message)
-    local guid, name, sworn, raw, version = message:match("^F|1|([^|]+)|([^|]+)|([01])|(%d+)|([%w%.%-?]+)$")
-    name = Address(name)
-    if guid then
-        local peer = A.ValidGUID(guid) and guid ~= myGUID and ValidName(name) and DecodeStatus(sworn, raw, version)
-        if not peer then return true end
-        local now = GetTime()
-        stats.heardF = stats.heardF + 1
-        Debug(HEARD .. " from your realm: " .. name .. " has the addon (" .. StatusWords(peer.sworn, peer.pledgedSinceLevel) .. ").")
-        heard[guid] = {at = now, sworn = peer.sworn, level = peer.pledgedSinceLevel or 0}
-        -- Someone beat us to it: drop our own copy if it says the same thing.
-        if shares[guid] and SameStatus(heard[guid], shares[guid].peer) then shares[guid] = nil end
-        -- A direct answer outranks a relay.
-        local current = peers[guid]
-        if not (current and not current.relayed and now - current.seen < A.TTL) then
-            peer.relayed = true
-            peers[guid] = A.MergePledgePeer(current, peer, now, true)
-        end
-        names[guid], noAddon[guid] = name, nil
-        likely[guid] = {name = name, seen = time(), sworn = peer.sworn or nil,
-            level = peer.pledgedSinceLevel}
-        Unqueue(guid)
-        ChatChanged(guid)
-        Refresh()
-        return true
-    end
-    local list = message:match("^N|1|([%x%-,]+)$")
-    if not list then return end
-    stats.heardN = stats.heardN + 1
-    local _, commas = list:gsub(",", "")
-    Debug(HEARD .. " from your realm: " .. Count(commas + 1, "player") .. " without the addon.")
-    local expires = time() + NO_ADDON_SHARED
-    local now = GetTime()
-    local seen = {}
-    for id in list:gmatch("[^,]+") do
-        local guid = "Player-" .. id
-        if A.ValidGUID(guid) then
-            seen[guid] = true
-            local peer = peers[guid]
-            -- Never let a relay hide a player we know has the addon, or one
-            -- we're simulating (a tester on a lower percentage would).
-            if not likely[guid] and not (peer and now - peer.seen < A.TTL) and not Simulated(guid) then
-                noAddon[guid] = math.max(noAddon[guid] or 0, expires)
-                Unqueue(guid)
-                ChatChanged(guid)
-            end
-        end
-    end
-    -- Already said by someone else: no need for us to say it again.
-    for i = #unsharedNo, 1, -1 do
-        if seen[unsharedNo[i]] then table.remove(unsharedNo, i) end
-    end
-    nextNoPost = math.max(nextNoPost, now + Between(NO_GAP))
-    return true
-end
--- Another tester's simulated find. Only taken when our own hash agrees, so
--- mismatched settings never push fakes onto our screen.
-local function OnSimShare(message)
-    local guid, name = message:match("^FS|1|([^|]+)|([^|]+)|1|0|sim$")
-    if not guid or guid == myGUID or not A.ValidGUID(guid) or not Simulated(guid) then return end
-    local now = GetTime()
-    heard[guid] = {at = now, sworn = true, level = 0}
-    shares[guid] = nil
-    local current = peers[guid]
-    Debug(HEARD .. " from another tester: " .. name .. " (simulated).")
-    if not (current and now - current.seen < A.TTL) then
-        peers[guid] = {sworn = true, version = "sim", simulated = true, relayed = true, seen = now}
-        TimeResult("answer", guid)
-    end
-    if ValidName(name) then names[guid] = name end
-    Unqueue(guid)
-    ChatChanged(guid)
-    Refresh()
-end
-
 -- A probe to someone unreachable comes back as a system error; hide it.
 local function HideUnreachable(_, _, message)
-    if Secret(message) or type(message) ~= "string" or not ERR_CHAT_PLAYER_NOT_FOUND_S then return end
+    if Secret(message) or type(message) ~= "string" then return end
+    -- The server's own "too fast" notice: count it with the refused sends,
+    -- and leave the message visible.
+    for _, notice in ipairs({ERR_CHAT_THROTTLED, ERR_GENERIC_THROTTLE}) do
+        if type(notice) == "string" and message == notice then
+            NoteRefused("the server says we're sending too fast")
+            return
+        end
+    end
+    if not ERR_CHAT_PLAYER_NOT_FOUND_S then return end
     for guid, p in pairs(pending) do
         if message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(p.name) then
             pending[guid] = nil
@@ -805,9 +635,6 @@ local function PruneCaches()
     for name, at in pairs(replied) do
         if clock - at > REPLY_GAP then replied[name] = nil end
     end
-    for guid, record in pairs(heard) do
-        if clock - record.at > A.TTL then heard[guid] = nil end
-    end
     for guid, at in pairs(seenAt) do
         if at and clock - at > 3600 then seenAt[guid], probeTimed[guid] = nil, nil end
     end
@@ -815,7 +642,7 @@ end
 -- Debug overlay states for players without a real crest.
 local function DebugState(guid)
     if not guid or guid == myGUID then return end
-    if pending[guid] or asking[guid] then return "asked" end
+    if pending[guid] then return "asked" end
     if RuledOut(guid) then return "none" end
 end
 -- How far discovery has got over the nameplates in view, and how long it took.
@@ -845,20 +672,15 @@ end
 -- One line a minute instead of a line per stranger.
 local function DebugSummary()
     if simPercent or next(plates) then Debug(Coverage()) end
-    if stats.asked + stats.probed + stats.sharedF + stats.sharedN + stats.heardF + stats.heardN == 0 then return end
+    if stats.probed + stats.answered + stats.silent + stats.unreachable == 0 then return end
     local parts = {}
     local function add(count, text, ...)
         if count > 0 then parts[#parts + 1] = text:format(Count(count, ...)) end
     end
-    add(stats.asked, "asked %s on your realm" .. (stats.askedSilent > 0 and (" (" .. stats.askedSilent .. " silent)") or ""), "player")
-    add(stats.probed, "probed %s on other realms", "player")
+    add(stats.probed, "probed %s", "player")
     add(stats.answered, "got %s", "answer")
     add(stats.silent, "%s went unanswered", "probe")
     add(stats.unreachable, "%s couldn't be whispered", "player")
-    add(stats.sharedF, "shared %s", "find")
-    add(stats.sharedN, "shared %s", "no-addon list")
-    add(stats.heardF, "heard %s from your realm", "find")
-    add(stats.heardN, "heard %s", "no-addon list")
     add(probeCount, "%s still waiting in line", "player")
     Debug("Since the last summary: " .. table.concat(parts, ", ") .. ".")
     for key in pairs(stats) do stats[key] = 0 end
@@ -880,8 +702,11 @@ local function Status(unit)
         if peer.sworn and (peer.simulated or FlaggedOrInside(unit, guid)) then return peer end
         return
     end
-    -- Nothing fresh: their saved status, while the re-check is out.
-    if Cached(guid) and FlaggedOrInside(unit, guid) then
+    -- Nothing fresh: their saved status, while the re-check is out. Only for
+    -- players a whisper can reach (our faction); nobody else gets re-checked.
+    local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+    local reachable = not Secret(theirs) and not Secret(ours) and theirs == ours
+    if reachable and Cached(guid) and FlaggedOrInside(unit, guid) then
         return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
     end
 end
@@ -895,7 +720,7 @@ local function CrestLook(texture, state)
     texture:SetAlpha(1)
 end
 local function OverlayState(unit)
-    if not (debugEnabled or simPercent) then return end
+    if not unit or not (debugEnabled or simPercent) then return end
     return DebugState(GUID(unit))
 end
 
@@ -1490,6 +1315,68 @@ local function PlateCrest(unit)
     end
     return crest
 end
+-- A nameplate that failed to refresh: say so (once a minute, debug or not,
+-- since it means a missing crest), with the game's error for a bug report.
+local errorAt = {}
+local function ReportError(what, err)
+    Debug("Error while updating " .. what .. ": " .. tostring(err))
+    if GetTime() - (errorAt[what] or -100) >= 60 then
+        errorAt[what] = GetTime()
+        Print("Couldn't update " .. what .. " (" .. tostring(err) .. "). Everything else still updates.")
+    end
+end
+local function PlateError(unit, err) ReportError("a nameplate crest", err) end
+-- /honor why: for the target (or mouseover), every condition behind their
+-- nameplate crest, to find out why one is missing. Read only.
+local PLATE_ADDONS = {"Plater", "TidyPlates_ThreatPlates", "TidyPlates", "BetterBlizzPlates", "Kui_Nameplates", "NeatPlates"}
+local function WhyNoCrest(say)
+    local unit = GUID("target") and "target" or "mouseover"
+    local guid = GUID(unit)
+    if not guid or not UnitIsPlayer(unit) then say("Target a player (or hover one) first.") return end
+    local yes = function(v) return v and "yes" or "|cffff5555no|r" end
+    local now = GetTime()
+    local peer = peers[guid]
+    local fresh = peer and now - peer.seen < A.TTL
+    say("Checking " .. Who(guid) .. ":")
+    if fresh then
+        say("  Known addon user: yes (" .. (peer.simulated and "simulated" or "heard " .. math.floor(now - peer.seen) .. " s ago")
+            .. "), sworn: " .. yes(peer.sworn) .. ".")
+    elseif likely[guid] then
+        say("  Known addon user: remembered only (saved status " .. (likely[guid].sworn and "sworn" or "not sworn")
+            .. ", " .. (likely[guid].misses or 0) .. " unanswered re-checks).")
+    else
+        local state = pending[guid] and "being asked now" or RuledOut(guid) and "no answer, marked as not having the addon"
+            or probes[guid] and "waiting to be asked" or Simulated(guid) and "simulated, not asked yet" or "not asked yet"
+        say("  Known addon user: |cffff5555no|r (" .. state .. ").")
+    end
+    local theirs, ours = UnitFactionGroup(unit), UnitFactionGroup("player")
+    say("  Same faction (can be whispered): " .. yes(not Secret(theirs) and theirs == ours)
+        .. ". PvP-flagged right now: " .. yes(Flagged(unit)) .. (InPausedInstance() and " (inside: not needed)" or "") .. ".")
+    local wearing = Status(unit) ~= nil
+    local overlay = not wearing and OverlayState(unit)
+    say("  Should wear a crest: " .. yes(wearing) .. ". Nameplate crests: " .. yes(db.plates) .. "."
+        .. (overlay and (" Debug crest expected: " .. (overlay == "asked" and "light grey (being asked)" or "dark grey (no addon)") .. ".") or ""))
+    local plateUnit
+    for u in pairs(plates) do if GUID(u) == guid then plateUnit = u end end
+    if not plateUnit then say("  Nameplate: none on screen for them.") return end
+    local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit(plateUnit)
+    if not plate then say("  Nameplate: the game didn't hand it over.") return end
+    if plate.IsForbidden and plate:IsForbidden() then say("  Nameplate: locked by the game here (forbidden), crests can't be added.") return end
+    local host = plate.UnitFrame or plate
+    local crest = host.HonorBoundCrest
+    say("  Blizzard nameplate frame visible: " .. yes(host:IsVisible()) .. ". Crest made: " .. yes(crest ~= nil)
+        .. ", showing: " .. yes(crest and crest:IsShown()) .. ", actually visible: " .. yes(crest and crest:IsVisible()) .. ".")
+    local loaded = {}
+    for _, name in ipairs(PLATE_ADDONS) do
+        if (C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded(name)) or (IsAddOnLoaded and IsAddOnLoaded(name)) then
+            loaded[#loaded + 1] = name
+        end
+    end
+    if #loaded > 0 then
+        say("  Nameplate addons loaded: " .. table.concat(loaded, ", ")
+            .. (host:IsVisible() and "." or ". They're hiding Blizzard's nameplate, which carries the crest."))
+    end
+end
 RefreshPlate = function(unit)
     local crest = PlateCrest(unit)
     if not crest then return end
@@ -1503,26 +1390,47 @@ RefreshPlate = function(unit)
         crest:Hide()
     end
 end
+-- One unit frame's crest (player, target, focus, party).
+local function RefreshWidget(widget)
+    widget.unit = WidgetUnit(widget)
+    Attach(widget)
+    local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
+    local state = not wearing and OverlayState(widget.unit)
+    if wearing or state then
+        widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
+        CrestLook(widget.crest, state or nil)
+        if not widget:IsShown() then widget.fade:Play() end
+        widget:Show()
+    else
+        widget:Hide()
+    end
+    -- Blizzard shows and hides the icon itself; alpha is ours to set.
+    if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
+end
 Refresh = function()
     if not db then return end
     DiscoverFrames()
+    -- Each frame on its own: one failing must never skip the nameplates.
     for _, widget in ipairs(widgets) do
-        widget.unit = WidgetUnit(widget)
-        Attach(widget)
-        local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
-        local state = not wearing and OverlayState(widget.unit)
-        if wearing or state then
-            widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
-            CrestLook(widget.crest, state or nil)
-            if not widget:IsShown() then widget.fade:Play() end
-            widget:Show()
-        else
-            widget:Hide()
-        end
-        -- Blizzard shows and hides the icon itself; alpha is ours to set.
-        if widget.icon then widget.icon:SetAlpha(wearing and 0 or 1) end
+        local ok, err = pcall(RefreshWidget, widget)
+        if not ok then ReportError("a unit frame crest", err) end
     end
-    for unit in pairs(plates) do RefreshPlate(unit) end
+    -- Take the nameplates from the game each pass rather than trusting that
+    -- every "added" event arrived (loading screens, reloads), and refresh
+    -- each one on its own so one failure can't skip the rest.
+    if C_NamePlate and C_NamePlate.GetNamePlates then
+        for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
+            local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+            if type(unit) == "string" and not Secret(unit) and not plates[unit] then
+                plates[unit] = true
+                Debug("Picked up a nameplate the game didn't announce (" .. unit .. ").", true)
+            end
+        end
+    end
+    for unit in pairs(plates) do
+        local ok, err = pcall(RefreshPlate, unit)
+        if not ok then PlateError(unit, err) end
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -1531,21 +1439,7 @@ end
 local function OnMessage(prefix, message, route, sender)
     if prefix ~= A.PREFIX or Secret(message) or type(message) ~= "string" or #message > 255 then return end
     if route == "WHISPER" then return OnWhisper(message, sender) end
-    if route == "CHANNEL" and message:find("^FS|") then
-        local me = UnitName("player")
-        if simPercent and not (type(sender) == "string" and not Secret(sender) and sender:match("^[^%-]+") == me) then
-            OnSimShare(message)
-        end
-        return
-    end
-    if route == "CHANNEL" and message:find("^[FN]|") then
-        -- Our own posts echo back on the channel; we already know what they say.
-        local me = UnitName("player")
-        if type(sender) == "string" and not Secret(sender) and sender:match("^[^%-]+") == me then return end
-        OnShare(message)
-        return
-    end
-    if route ~= "GUILD" and route ~= "CHANNEL" and route ~= "PARTY" and route ~= "RAID" and route ~= "INSTANCE_CHAT" then return end
+    if route ~= "GUILD" and route ~= "PARTY" and route ~= "RAID" and route ~= "INSTANCE_CHAT" then return end
     local requested = message:match("^Q|1|(.+)$")
     if requested then
         if requested == myGUID and GetTime() - lastAnswer >= 5 then
@@ -1575,7 +1469,7 @@ local function OnMessage(prefix, message, route, sender)
             Debug(HEARD .. " " .. Describe(message) .. " via " .. (ROUTES[route] or route) .. ".", isPledge)
         end
         -- Hearing from someone always overrides an earlier "no addon".
-        noAddon[guid], asking[guid] = nil, nil
+        noAddon[guid] = nil
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
         -- Remember sworn players we hear from directly (group, guild, realm
@@ -1601,18 +1495,15 @@ local function OnTooltip(tooltip)
     if Secret(unit) or not unit then return end
     if Status(unit) then TooltipLines(tooltip, unit) end
 end
-local function Tick()
-    local now = GetTime()
+local function TickWork(now)
     for guid, peer in pairs(peers) do
         if now - peer.seen >= A.TTL then peers[guid] = nil end
-    end
-    for guid, at in pairs(queries) do
-        if now - at > A.TTL then queries[guid] = nil end
     end
     for guid, at in pairs(groupInside.at) do
         if now - at >= groupInside.fresh then groupInside.at[guid] = nil end
     end
     PumpProbes()
+    ReportRefused(now)
     if now - lastMinute >= (simPercent and 15 or 60) then
         lastMinute = now
         PruneCaches()
@@ -1622,7 +1513,11 @@ local function Tick()
     if lastPayload ~= A.Encode(myGUID or "", Sworn()) or lastPledgePayload ~= PledgePayload() or not lastAnnounce or now - lastAnnounce >= 60 then
         Announce(true)
     end
-    if not ChannelID() and now - lastJoin >= 60 then JoinChannel() end
+end
+-- Once a second. The redraw runs even if the work before it fails.
+local function Tick()
+    local ok, err = pcall(TickWork, GetTime())
+    if not ok then ReportError("discovery", err) end
     Refresh()
 end
 local function PrintStatus()
@@ -1635,8 +1530,8 @@ local function PrintStatus()
     end
     local count = 0
     for _, peer in pairs(peers) do if peer.sworn then count = count + 1 end end
-    Print(Count(count, "sworn player") .. " seen recently. "
-        .. (ChannelID() and "Connected to the HonorBound channel." or "Still joining the HonorBound channel."))
+    Print(Count(count, "sworn player") .. " seen recently. Everyone you see is asked by whisper"
+        .. (whisperCap and (" (at most " .. whisperCap .. " a second).") or ", unpaced."))
     Print("Crests in chat: " .. (not A.chatAvailable and "not supported on this client" or db.chatIcons == false and "off" or "on")
         .. ". Reflag on your next action bar key: " .. (db.autoReflag == false and "off" or "on") .. ". /honor help for commands.")
 end
@@ -1656,18 +1551,26 @@ SlashCmdList.HONORBOUND = function(input)
             Print("Debug off.")
         else
             Print(debugVerbose and "Debug verbose until you reload or log out: every message sent and received, plus a summary."
-                or "Debug on until you reload or log out: status, shares, failures and a summary. /honor debug verbose shows everything.")
-            local channel = ChannelID()
-            Debug("Realm channel: " .. (channel and ("connected (/" .. channel .. ")") or "not joined yet")
+                or "Debug on until you reload or log out: status updates, failures and a summary. /honor debug verbose shows every whisper.")
+            Debug("Whispers: " .. (whisperCap and ("at most " .. whisperCap .. " a second") or "unpaced") .. " (paced inside dungeons and raids)"
                 .. ". Group: " .. (GroupRoute() and ROUTES[GroupRoute()]:gsub("^your ", "") or "none")
                 .. ". Guild: " .. (IsInGuild() and "yes" or "no")
                 .. ". Last status sent: " .. (lastAnnounce and (math.floor(GetTime() - lastAnnounce) .. " s ago") or "not yet")
-                .. ". Waiting in line: " .. probeCount .. ". Replies to send: " .. #replies .. ".")
+                .. ". Waiting to be asked: " .. probeCount .. ". Replies to send: " .. #replies .. ".")
             Debug("Chat crests: " .. (not A.chatAvailable and "unavailable on this client (the chat name hook is missing)"
                 or db.chatIcons == false and "off (/honor chat on)" or "on")
                 .. (IsAddOnLoaded and IsAddOnLoaded("Prat-3.0") and ". Prat is loaded and may hide them." or "."))
             Debug("\"Sent\" means the game accepted it, not that anyone received it.")
         end
+        return
+    end
+    local rateCommand = (input or ""):lower():match("^%s*rate%s*(.-)%s*$")
+    if rateCommand ~= nil then
+        local value = tonumber(rateCommand)
+        if rateCommand == "off" or rateCommand == "0" then whisperCap = nil
+        elseif value and value >= 1 and value == math.floor(value) then whisperCap = value
+        elseif rateCommand ~= "" then Print("Use /honor rate N (whispers a second) or /honor rate off.") return end
+        Print("Whispers: " .. (whisperCap and ("at most " .. whisperCap .. " a second") or "unpaced") .. " outside dungeons and raids.")
         return
     end
     local simCommand = (input or ""):lower():match("^%s*sim%s*(.-)%s*$")
@@ -1695,6 +1598,10 @@ SlashCmdList.HONORBOUND = function(input)
     end
     if (input or ""):lower():match("^%s*chatcheck%s*$") then
         A.ChatCheck(Print)
+        return
+    end
+    if (input or ""):lower():match("^%s*why%s*$") then
+        WhyNoCrest(Print)
         return
     end
     local chatCommand = (input or ""):lower():match("^%s*chat%s*(.-)%s*$")
@@ -1814,8 +1721,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             -- Grey crests in chat only while debugging or simulating.
             if debugEnabled or simPercent then return DebugState(guid) end
         end)
-        -- Give the client's usual channels time to claim their channel numbers.
-        lastJoin = GetTime() - 45
         C_ChatInfo.RegisterAddonMessagePrefix(A.PREFIX)
         if TooltipDataProcessor and Enum and Enum.TooltipDataType then
             TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, OnTooltip)
@@ -1833,7 +1738,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end)
         A.optionsCategory = built and category or nil
         if not built then Print("Couldn't build the settings page (" .. tostring(category) .. "). The /honor commands still work.") end
-        C_Timer.After(15, JoinChannel)
         C_Timer.NewTicker(1, Tick)
         UpdatePrompt()
         Refresh()
