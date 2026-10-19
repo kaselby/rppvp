@@ -871,12 +871,19 @@ moving = false
 setFlag(false)
 advance(A.GRACE + 60)
 check(HonorBoundCharDB.sworn, "idle while unflagged: the oath holds past the grace period")
+check(prompt.text.text:find("starts when you move", 1, true), "unflagged while idle: the countdown hasn't started")
+-- One step: the countdown runs for idle.after seconds, then holds.
+event("PLAYER_STARTED_MOVING")
+advance(40)
 check(prompt.text.text:find("Paused while you're away", 1, true), "the popup says the countdown is paused")
+local heldAt = prompt.text.text:match("within (%d+:%d+)")
+check(heldAt == "4:30", "the step cost the 30 s it kept the countdown running, no more")
 moving = true
-advance(A.GRACE - 60)
+advance(A.GRACE - 40)
 check(HonorBoundCharDB.sworn, "active again: the countdown resumes from where it stopped")
-advance(70)
+advance(20)
 check(not HonorBoundCharDB.sworn, "and breaks the oath once the rest runs out")
+moving = true
 -- Casting counts as activity even standing still.
 HonorBoundCharDB.sworn, HonorBoundCharDB.graceLeft = true, nil
 setFlag(true)

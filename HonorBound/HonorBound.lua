@@ -797,9 +797,13 @@ local reflagPressedAt = -100
 
 -- Away protection: while you're unflagged and doing nothing, the grace
 -- countdown waits. Moving, turning, casting, combat or looting is activity;
--- chatting isn't. idle.after seconds without any of it counts as away.
+-- chatting isn't. idle.after seconds without any of it counts as away, and
+-- a new countdown starts out away: it waits for your first activity, so an
+-- unflag while you're AFK (or a login unflagged) costs nothing until you're
+-- back. idle.waiting: no activity yet since this countdown began.
 local idle = {last = GetTime(), after = 30}
-function idle.Note() idle.last = GetTime() end
+function idle.Note() idle.last, idle.waiting = GetTime(), nil end
+function idle.Wait() idle.last, idle.facing, idle.waiting = -math.huge, nil, true end
 function idle.Poll()
     if IsPlayerMoving and IsPlayerMoving() then idle.Note() end
     if UnitAffectingCombat and UnitAffectingCombat("player") then idle.Note() end
@@ -1386,7 +1390,10 @@ UpdatePrompt = function()
         -- Our own countdown, even while the game's PvP timer runs after a
         -- typed /pvp: only ours pauses while you're away.
         -- Logged in unflagged: grace left from an earlier session carries over.
-        deadline = deadline or (GetTime() + (char.graceLeft or A.GRACE))
+        if not deadline then
+            deadline = GetTime() + (char.graceLeft or A.GRACE)
+            idle.Wait()
+        end
         idle.Poll()
         if idle.Away() then
             -- Away: hold the countdown where it was.
@@ -1413,7 +1420,8 @@ UpdatePrompt = function()
         prompt.text:SetText("You're unflagged. "
             .. (reflagArmed and "Press an action bar key, click a bar button, or click below" or "Click below")
             .. " within " .. FormatTime(left) .. ", or your oath breaks and your crest goes."
-            .. (idle.frozen and " (Paused while you're away.)" or ""))
+            .. (idle.waiting and " (The countdown starts when you move.)"
+                or idle.frozen and " (Paused while you're away.)" or ""))
         prompt.flag:SetText("Stay flagged")
         SetFlagButton(true)
     else
