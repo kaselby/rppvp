@@ -10,14 +10,11 @@ local events = {
     -- Incoming whispers show the sender; outgoing ones the person whispered.
     CHAT_MSG_WHISPER = true, CHAT_MSG_WHISPER_INFORM = true,
 }
--- The same faction crest as on frames and nameplates. The caller works out
--- the sender's faction; any crest already in the name marks it as done.
 local crests = "Interface\\AddOns\\HonorBound\\Media\\Crest"
 local function Icon(faction)
     return "|T" .. crests .. (faction == "Horde" and "Horde" or "Alliance") .. ".tga:0:0|t "
 end
--- Debug overlay in chat, matching nameplates: light grey while being asked,
--- dark grey once marked no-addon.
+-- Debug overlay: light grey while being asked, dark grey once ruled out.
 local GREY = {asked = "255:255:255", none = "102:102:102"}
 local function GreyIcon(state)
     return "|T" .. crests .. "Grey.tga:0:0:0:0:128:128:0:128:0:128:" .. GREY[state] .. "|t "
@@ -35,8 +32,8 @@ local function CurrentIcon(rules, guid)
     return GREY[state] and GreyIcon(state) or ""
 end
 
--- Recent chat lines by line ID, so a crest can be fixed once a probe
--- answers: the first message from a stranger prints before we know them.
+-- A stranger's first line prints before their probe answers; keep line IDs to
+-- fix it later.
 local LINES_KEPT = 300
 local lineGuid, lineOrder = {}, {}
 local function RememberLine(lineID, guid)
@@ -68,8 +65,7 @@ local function Recrest(text, lineID, icon)
     shown = shown:gsub("%[", "[" .. icon, 1)
     return head .. shown .. tail
 end
--- Bring already-printed lines from this player up to date, where the chat
--- frames allow rewriting history. Lines the game keeps hidden are skipped.
+-- Re-crest this player's printed lines where the client allows it.
 function A.RefreshChatFor(guid)
     local rules = A.chatRules
     if not rules or not guid then return end
@@ -122,8 +118,8 @@ function A.InstallChat(enabled, pledged, faction, overlay)
     local filter, rules = A.CreateChatFilter(enabled, pledged, faction, overlay)
     A.chatFilter, A.chatRules = filter, rules
     api.AddSenderNameFilter(filter)
-    -- TRP3 rebuilds names. Run after name filters, including ones re-registered
-    -- by settings changes. Never replace another addon's function or filter.
+    -- TRP3 rebuilds names: stay last, even after filters re-register, without
+    -- replacing anyone else's.
     if hooksecurefunc then
         local reordering = false
         hooksecurefunc(api, "AddSenderNameFilter", function(callback)
@@ -138,8 +134,7 @@ function A.InstallChat(enabled, pledged, faction, overlay)
     return true
 end
 
--- /honor chatcheck: what the chat frames on this client actually look like,
--- to see why first-line crests do or don't work. Read only.
+-- /honor chatcheck: how this client's chat frames look, for first-line crests. Read only.
 local function Raw(text)
     if not accessible(text) then return "(hidden by the game)" end
     if type(text) ~= "string" then return "(" .. type(text) .. ")" end
