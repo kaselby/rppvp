@@ -10,6 +10,8 @@ assert(table.concat(debugLines, "\n"):find("Oath broken: HonorBound missed 2 h 3
     table.concat(debugLines, "\n"))
 advance(1)
 assert(A.ReadSave(me).level == 0, "and the save macro says not sworn")
+assert(A.ReadSave(me).broken == HonorBoundCharDB.brokenUntil and A.BrokenLeft(HonorBoundCharDB.brokenUntil), "and holds the oathbreaker mark")
+serverSkip = serverSkip + A.OATHBREAKER
 SlashCmdList.HONORBOUND("swear")
 assert(HonorBoundCharDB.verify and HonorBoundCharDB.verify.untracked == 0 and math.abs(HonorBoundCharDB.verify.since - (36000 + 3600)) <= 2,
     "a new oath starts a fresh record")

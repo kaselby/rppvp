@@ -217,9 +217,12 @@ Announce = function(force)
     -- Not during an encounter or while zoning; it goes out once that's over.
     if SendingBlocked() then A.announceAfterPause = true return end
     local reached = {}
+    local brokenUntil = not char.sworn and A.BrokenLeft(char.brokenUntil) and char.brokenUntil
+    local brokenPayload = brokenUntil and A.EncodeBroken(myGUID, brokenUntil)
     local function To(route, target, extra)
         if Send(payload, route, target) and Send(pledgePayload, route, target)
-            and (not extra or Send(extra, route, target)) then
+            and (not extra or Send(extra, route, target))
+            and (not brokenPayload or Send(brokenPayload, route, target)) then
             reached[#reached + 1] = ROUTES[route]
         end
     end
@@ -356,6 +359,11 @@ local function DecodeStatus(sworn, raw, version)
     if not level or level > 60 then return end
     return {sworn = sworn == "1", version = version, pledgedSinceLevel = level > 0 and level or nil}
 end
+-- After a status whisper: an oathbreaker says so too (older clients ignore it).
+function A.WhisperBroken(name)
+    if char.sworn or not A.BrokenLeft(char.brokenUntil) then return end
+    Send(A.EncodeBroken(myGUID, char.brokenUntil), "WHISPER", name)
+end
 local function WhisperPayload(kind)
     local level = Sworn() and A.PledgeLevel(char) or 0
     return ("W%s|1|%s|%d|%d|%s"):format(kind, myGUID, Sworn() and 1 or 0, level, A.VERSION)
@@ -457,6 +465,7 @@ local function PumpWhispers(now)
     while replies[1] and MayWhisper(sent) do
         local reply = replies[1]
         if not Send(WhisperPayload("R"), "WHISPER", reply.name) then return end
+        A.WhisperBroken(reply.name)
         table.remove(replies, 1)
         replied[reply.name] = now
         sent = sent + 1
@@ -485,6 +494,7 @@ local function PumpWhispers(now)
                 probes[guid], probeCount = e, probeCount + 1
                 return
             end
+            A.WhisperBroken(name)
             pending[guid] = {at = now, name = name}
             stats.probed = stats.probed + 1
             sent = sent + 1
@@ -502,6 +512,15 @@ end
 local function OnWhisper(message, sender)
     if Secret(sender) or type(sender) ~= "string" then return end
     sender = Address(sender)
+    local brokenGUID, brokenUntil = A.DecodeBroken(message, A.Now())
+    if brokenGUID then
+        local known = GuidName(brokenGUID)
+        if known and known:match("^[^%-]+") ~= sender:match("^[^%-]+") then return end
+        A.NoteBroken(brokenGUID, brokenUntil)
+        ChatChanged(brokenGUID)
+        Refresh()
+        return
+    end
     local kind, guid, peer = DecodeWhisper(message)
     if not kind or guid == myGUID then return end
     -- The claimed GUID must belong to the sender.
@@ -511,6 +530,7 @@ local function OnWhisper(message, sender)
         .. StatusWords(peer.sworn, peer.pledgedSinceLevel) .. ")" .. (kind == "Q" and ", and now know about you." or "."), true)
     local now = GetTime()
     peers[guid] = A.MergePledgePeer(peers[guid], peer, now, true)
+    if peer.sworn then A.NoteBroken(guid, nil) end
     noAddon[guid] = nil
     local probed = pending[guid]
     pending[guid] = nil
@@ -573,6 +593,11 @@ local function LoadCaches()
         end
     end
     noAddon, likely = db.noAddon, db.likely
+    db.oathbroken = type(db.oathbroken) == "table" and db.oathbroken or {}
+    for guid, untilTime in pairs(db.oathbroken) do
+        if not A.ValidGUID(guid) or not A.BrokenLeft(untilTime) then db.oathbroken[guid] = nil end
+    end
+    A.oathbroken = db.oathbroken
 end
 local function PruneCaches()
     local now = time()
@@ -653,6 +678,24 @@ local function Status(unit)
     if reachable and Cached(guid) and FlaggedOrInside(unit, guid) then
         return {sworn = true, cached = true, pledgedSinceLevel = likely[guid].level, pledgeSeen = GetTime()}
     end
+end
+-- Oathbreakers: a broken oath shows as a broken sword for A.OATHBREAKER
+-- seconds of server time, in game or not. Ours is char.brokenUntil (also in
+-- the save macro, so neither reinstalling nor another computer clears it);
+-- other players' come from their "B" messages, kept in db.oathbroken.
+function A.BrokenLeft(untilTime)
+    local left = type(untilTime) == "number" and untilTime - A.Now()
+    if left and left > 0 then return left end
+end
+function A.BrokenFor(unit)
+    local guid = GUID(unit)
+    if not guid then return end
+    if guid == myGUID then return char and not char.sworn and A.BrokenLeft(char.brokenUntil) end
+    return A.oathbroken and A.BrokenLeft(A.oathbroken[guid])
+end
+function A.NoteBroken(guid, untilTime)
+    if not A.oathbroken or guid == myGUID then return end
+    A.oathbroken[guid] = A.BrokenLeft(untilTime) and untilTime or nil
 end
 -- Debug overlay: light grey while being asked, dark grey once ruled out.
 local OVERLAY_TINT = {asked = {1, 1, 1}, none = {0.4, 0.4, 0.4}}
@@ -870,6 +913,12 @@ function idle.ResetGrace()
     countLeft, countedAt, char.graceLeft = nil, nil, nil
 end
 local function Swear()
+    local broken = A.BrokenLeft(char.brokenUntil)
+    if broken then
+        char.joining = nil
+        Print("You broke your oath. You can swear again in " .. A.Duration(broken) .. ".")
+        return
+    end
     A.StartPledge(char, UnitLevel("player"))
     char.sworn, char.joining, char.declined = true, nil, nil
     idle.ResetGrace()
@@ -888,7 +937,9 @@ local function Break(reason)
     idle.ResetGrace()
     -- In combat, UpdatePrompt disarms once it ends.
     DisarmReflag()
-    Print("Oath broken: " .. reason .. ". Your crest is gone. Type /honor swear to take it again.")
+    char.brokenUntil = A.Now() + A.OATHBREAKER
+    Print("Oath broken: " .. reason .. ". Your crest is gone, and others will see you as an oathbreaker for "
+        .. A.Duration(A.OATHBREAKER) .. ". After that, /honor swear takes it again.")
     char.verify = nil
     A.MarkSave()
     Announce(true)
@@ -984,7 +1035,7 @@ function A.LocalSave()
     if char.sworn and level == 0 then return end -- no level to save yet
     local v = char.sworn and char.verify
     return {level = level, since = v and v.since or 0, seen = v and v.seen or 0,
-        untracked = v and v.untracked or 0, n = char.saveSeq or 0}
+        untracked = v and v.untracked or 0, n = char.saveSeq or 0, broken = char.brokenUntil or 0}
 end
 function A.FlushSave()
     -- Not before the macro is read: writing first would overwrite the record
@@ -1111,6 +1162,9 @@ function A.SyncSave()
     local saved, why
     if char.macroSave ~= false then saved, why = A.ReadSave(myGUID) end
     local mine = char.saveSeq or 0
+    -- An oathbreaker mark is kept from either copy: deleting one doesn't clear it.
+    local brokenSaved, brokenMine = saved and saved.broken or 0, char.brokenUntil or 0
+    if brokenSaved > brokenMine then char.brokenUntil = brokenSaved end
     -- Newer than this computer's copy: another computer played since. A tie
     -- goes to the macro too: this computer may have changed before reading it.
     if saved and saved.n >= mine then
@@ -1144,6 +1198,8 @@ function A.SyncSave()
         -- Missing, edited or older: this computer's copy stands.
         if char.sworn ~= nil and (not saved or mine > saved.n) then A.MarkSave() end
     end
+    -- A mark only this computer has goes into the macro.
+    if brokenMine > brokenSaved then A.MarkSave() end
     UpdatePrompt()
     A.RequestPlayed()
 end
@@ -1357,6 +1413,12 @@ end
 -- Unit frame crests and tooltips
 
 local function TooltipLines(tooltip, unit)
+    local broken = not Status(unit) and A.BrokenFor(unit)
+    if broken then
+        tooltip:AddLine(("|T%sBroken.tga:18:18|t Oathbreaker"):format(MEDIA), 0.8, 0.3, 0.3)
+        tooltip:AddLine("Broke their RP-PvP oath. Can swear again in " .. A.Duration(broken) .. ".", 0.85, 0.85, 0.85)
+        return
+    end
     tooltip:AddLine(("|T%sCrest%s.tga:18:18|t HonorBound"):format(MEDIA, Faction(unit)), 1, 0.83, 0.4)
     local guid = GUID(unit)
     local level
@@ -1375,7 +1437,7 @@ local function TooltipLines(tooltip, unit)
     end
 end
 local function BadgeTooltip(widget)
-    if not widget.unit or not Status(widget.unit) then return end
+    if not widget.unit or not (Status(widget.unit) or A.BrokenFor(widget.unit)) then return end
     GameTooltip:SetOwner(widget, "ANCHOR_RIGHT")
     TooltipLines(GameTooltip, widget.unit)
     GameTooltip:Show()
@@ -1552,9 +1614,10 @@ RefreshPlate = function(unit)
     if not crest then return end
     local wearing = Status(unit) ~= nil
     local state = not wearing and OverlayState(unit)
-    if db.plates and (wearing or state) then
-        crest:SetTexture(MEDIA .. "Crest" .. Faction(unit) .. ".tga")
-        CrestLook(crest, state or nil)
+    local broken = not wearing and A.BrokenFor(unit)
+    if db.plates and (wearing or broken or state) then
+        crest:SetTexture(MEDIA .. (broken and "Broken" or ("Crest" .. Faction(unit))) .. ".tga")
+        CrestLook(crest, not broken and state or nil)
         crest:Show()
     else
         crest:Hide()
@@ -1565,9 +1628,10 @@ local function RefreshWidget(widget)
     Attach(widget)
     local wearing = widget.unit ~= nil and Status(widget.unit) ~= nil
     local state = not wearing and OverlayState(widget.unit)
-    if wearing or state then
-        widget.crest:SetTexture(MEDIA .. "Crest" .. Faction(widget.unit) .. ".tga")
-        CrestLook(widget.crest, state or nil)
+    local broken = not wearing and widget.unit ~= nil and A.BrokenFor(widget.unit)
+    if wearing or broken or state then
+        widget.crest:SetTexture(MEDIA .. (broken and "Broken" or ("Crest" .. Faction(widget.unit))) .. ".tga")
+        CrestLook(widget.crest, not broken and state or nil)
         if not widget:IsShown() then widget.fade:Play() end
         widget:Show()
     else
@@ -1627,6 +1691,13 @@ local function OnMessage(prefix, message, route, sender)
         end
         return
     end
+    local brokenGUID, brokenUntil = A.DecodeBroken(message, A.Now())
+    if brokenGUID then
+        A.NoteBroken(brokenGUID, brokenUntil)
+        ChatChanged(brokenGUID)
+        Refresh()
+        return
+    end
     local guid, peer = A.DecodePledge(message)
     local isPledge = guid ~= nil
     if not guid then guid, peer = A.Decode(message) end
@@ -1640,6 +1711,7 @@ local function OnMessage(prefix, message, route, sender)
         if pending[guid] then pending[guid] = nil stats.answered = stats.answered + 1 end
         TimeResult("answer", guid)
         peers[guid] = A.MergePledgePeer(peers[guid], peer, GetTime(), isPledge)
+        if peer.sworn then A.NoteBroken(guid, nil) end
         -- Remember sworn players heard here too, for their crest after a relog.
         local saved = likely[guid]
         if not saved and peer.sworn then
@@ -1658,7 +1730,7 @@ local function OnTooltip(tooltip)
     if tooltip ~= GameTooltip or not db then return end
     local _, unit = tooltip:GetUnit()
     if Secret(unit) or not unit then return end
-    if Status(unit) then TooltipLines(tooltip, unit) end
+    if Status(unit) or A.BrokenFor(unit) then TooltipLines(tooltip, unit) end
 end
 local function TickWork(now)
     if A.announceAfterPause and not SendingBlocked() then A.announceAfterPause = nil Announce(true) end
@@ -1702,6 +1774,9 @@ local function PrintStatus()
         else
             Print("Verification: waiting for your play time from the server.")
         end
+    elseif A.BrokenLeft(char.brokenUntil) then
+        Print("|cffff5555Oathbreaker|r: you broke your oath. You can swear again in "
+            .. A.Duration(A.BrokenLeft(char.brokenUntil)) .. ".")
     else
         Print("You haven't sworn on this character. Type /honor swear.")
     end
@@ -1806,6 +1881,8 @@ SlashCmdList.HONORBOUND = function(input)
     if command == "swear" or command == "join" then
         if char.sworn then
             Print("You're already sworn.")
+        elseif A.BrokenLeft(char.brokenUntil) then
+            Swear() -- says how long is left
         elseif Desired() then
             Swear()
         else

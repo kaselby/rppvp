@@ -2,7 +2,8 @@
 -- the server, so the record follows the character to any computer.
 --
 -- l = pledged-since level (0 = not sworn, so a break is saved too), s, p, u =
--- the verify record's since, seen and untracked, n = write counter, h = a hash
+-- the verify record's since, seen and untracked, n = write counter, b = server
+-- time the oathbreaker mark ends (0 = none; HB3 saves had no b), h = a hash
 -- of it all bound to the character's GUID. That stops hand edits and copies
 -- to another character, not a determined cheater: the formula ships with the
 -- addon.
@@ -28,24 +29,29 @@ local function Seal(guid, fields)
     local inner = Hash(fields .. "|" .. tostring(guid) .. "|HonorBound|3")
     return Hash(inner .. "|" .. tostring(guid) .. "|" .. fields)
 end
-local function Fields(r)
-    return ("l=%d;s=%d;p=%d;u=%d;n=%d"):format(r.level, math.floor(r.since), math.floor(r.seen),
+local function Fields(r, format)
+    local fields = ("l=%d;s=%d;p=%d;u=%d;n=%d"):format(r.level, math.floor(r.since), math.floor(r.seen),
         math.floor(r.untracked), r.n)
+    if format == "HB3" then return fields end
+    return fields .. (";b=%d"):format(math.floor(r.broken or 0))
 end
 
--- record: {level, since, seen, untracked, n}
+-- record: {level, since, seen, untracked, n, broken}
 function A.EncodeSave(guid, record)
     local fields = Fields(record)
-    return WARNING .. "\n#HB3 " .. fields .. ";h=" .. Seal(guid, fields)
+    return WARNING .. "\n#HB4 " .. fields .. ";h=" .. Seal(guid, fields)
 end
 -- The record, or nil and why: "missing" or "altered".
 function A.DecodeSave(guid, body)
     if type(body) ~= "string" then return nil, "missing" end
-    local l, s, p, u, n, h = body:match("#HB3 l=(%d+);s=(%d+);p=(%d+);u=(%d+);n=(%d+);h=(%x+)")
-    if not l then return nil, (body:find("#HB3", 1, true) and "altered" or "missing") end
+    local format, l, s, p, u, n, b, h = body:match("#(HB4) l=(%d+);s=(%d+);p=(%d+);u=(%d+);n=(%d+);b=(%d+);h=(%x+)")
+    if not format then
+        format, l, s, p, u, n, h = body:match("#(HB3) l=(%d+);s=(%d+);p=(%d+);u=(%d+);n=(%d+);h=(%x+)")
+    end
+    if not format then return nil, ((body:find("#HB4", 1, true) or body:find("#HB3", 1, true)) and "altered" or "missing") end
     local record = {level = tonumber(l), since = tonumber(s), seen = tonumber(p),
-        untracked = tonumber(u), n = tonumber(n)}
-    if record.level > 60 or h:upper() ~= Seal(guid, Fields(record)) then return nil, "altered" end
+        untracked = tonumber(u), n = tonumber(n), broken = tonumber(b) or 0}
+    if record.level > 60 or h:upper() ~= Seal(guid, Fields(record, format)) then return nil, "altered" end
     return record
 end
 

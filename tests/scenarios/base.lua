@@ -116,6 +116,9 @@ end
 function RequestTimePlayed() playedRequests = playedRequests + 1 end
 function UnitLevel() return 20 end
 function time() return 1000000 + now end
+-- Server time; offline days are added to serverSkip.
+serverSkip = 0
+function GetServerTime() return 1000000 + now + serverSkip end
 local inGuild = true
 function IsInGuild() return inGuild end
 local lockdown, players, systemFilters, statusResult, whisperResult = false, {}, {}, nil, nil
