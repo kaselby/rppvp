@@ -1,5 +1,5 @@
 local _, Addon = ...
-Addon.VERSION = "0.6.0"
+Addon.VERSION = "0.7.5"
 Addon.PREFIX = "HONORBOUND1"
 Addon.TTL = 300     -- seconds before a silent peer is forgotten
 Addon.GRACE = 300   -- seconds a sworn player may stay unflagged before the oath breaks
@@ -17,8 +17,7 @@ function Addon.Decode(message)
     return guid, { sworn = sworn == "1", version = version }
 end
 -- "I|1|<GUID>|<1 inside a dungeon, raid or scenario, 0 not>|<version>"
--- Sent to the group only. A party member inside a dungeon can't be flagged,
--- so this tells the ones outside to keep their crest. Older clients ignore it.
+-- Group only: members outside keep the crest of one who can't be flagged.
 function Addon.EncodeInside(guid, inside)
     return ("I|1|%s|%d|%s"):format(guid, inside and 1 or 0, Addon.VERSION)
 end

@@ -2,13 +2,15 @@
 ## Title: HonorBound
 ## Notes: A community crest for players sworn to RP-PvP. Keeps you flagged and shows the crest on sworn players.
 ## Author: Moderately Aware, Krylea, Jmcq, Raffoo
-## Version: 0.6.0
+## Version: 0.7.5
 ## IconTexture: Interface\AddOns\HonorBound\Media\Icon
 ## SavedVariables: HonorBoundDB
 ## SavedVariablesPerCharacter: HonorBoundCharDB
 
 Core.lua
 Pledge.lua
+Verify.lua
+Save.lua
 Chat.lua
 HonorBound.lua
 Options.lua

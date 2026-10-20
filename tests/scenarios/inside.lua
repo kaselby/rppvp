@@ -1,5 +1,4 @@
--- 0.4.6: a party member inside a dungeon keeps their crest for the ones
--- outside, from their own "I" message.
+-- A party member inside a dungeon keeps their crest for those outside (I messages).
 setup()
 local mate = "Player-70-AAA777"
 group = true
@@ -23,7 +22,7 @@ assert(not targetBadge().shown, "only a group member's word counts")
 assert(A.DecodeInside(A.Encode(mate, true)) == nil and A.Decode(A.EncodeInside(mate, true)) == nil
     and A.DecodePledge(A.EncodeInside(mate, true)) == nil, "I is its own kind: S and P readers ignore it")
 
--- Our side: we tell the group while we're inside, and once when we leave.
+-- Our side: we tell the group while inside, and once on leaving.
 local function insides(route)
     local found = {}
     for _, m in ipairs(sent) do
@@ -37,15 +36,17 @@ sent = {}
 instance = true
 event("PLAYER_ENTERING_WORLD")
 setFlag(false)
+assert(#insides() == 0, "nothing goes out during the arrival pause")
+advance(4)
 assert(#insides("PARTY") >= 1 and insides("PARTY")[1] == "I|1|" .. me .. "|1|" .. A.VERSION, "entering: the party hears we're inside")
-assert(#insides("CHANNEL") == 0, "the realm channel doesn't")
 sent = {}
 advance(61)
 assert(#insides("PARTY") >= 1, "and again with each announcement while inside")
 sent = {}
 instance = false
 event("PLAYER_ENTERING_WORLD")
+advance(4)
 assert(#insides("PARTY") == 1 and insides("PARTY")[1]:find("|0|"), "leaving: one message saying we're out")
-advance(70)
+advance(66)
 assert(#insides() == 1, "then nothing more")
 print("inside: ok")

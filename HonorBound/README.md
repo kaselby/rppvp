@@ -16,7 +16,9 @@ game.
   key or click flags you again. Keep playing and you won't notice.
 - **Gives you 5 minutes.** If you stay unflagged for 5 minutes, your oath
   breaks and your crest is gone. The clock waits while you're inside a
-  dungeon or away from the keyboard.
+  dungeon, doesn't start until you do something (move, turn, cast, fight
+  or loot), and pauses after 30 seconds of doing nothing, so being
+  unflagged while you're away from the keyboard costs nothing.
 - **Shows the crest.** Sworn players wear a blue (Alliance) or red (Horde)
   crest in place of the usual PvP icon (on portraits and party frames), on
   nameplates, and in chat. Hover it
@@ -69,9 +71,16 @@ the popup waits after a dungeon.
 
 ## Good to know
 
-- For now, HonorBound runs on the honor system. It keeps *you* flagged, but
-  anyone could switch the addon off. Stronger checks, in the spirit of the
-  Hardcore addon's verification, are on the way and will be in place before
-  launch, so a broken oath can't just be quietly hidden.
+- Your pledge is **verified** against your play time, like the Hardcore
+  addon: Blizzard's `/played` keeps counting while HonorBound is off, so play
+  it didn't see shows up. A little is allowed for crashes and other computers
+  (2 hours, or 2% of your play since the pledge if that's more); beyond that
+  **your oath breaks**. `/honor` shows where you stand.
+- Your pledge and its verification are saved in a character macro called
+  **HonorBound Save**, so they follow your character to other computers. Don't
+  edit or delete it: an edited macro is ignored, and if it's gone your pledge
+  only lives on this computer until HonorBound recreates it. If your
+  character macros are full and you'd rather not free one, choose Not now
+  and confirm; turn it back on in the settings or with `/honor save`.
 - Crests work across realms, but not across factions.
 - Made by Moderately Aware, Krylea, Jmcq and Raffoo. Found a bug? [Open an issue](https://github.com/kaselby/rppvp/issues).

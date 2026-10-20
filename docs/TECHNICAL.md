@@ -2,9 +2,9 @@
 
 For contributors. Player docs are in the [README](../README.md).
 
-## Discovery and compatibility (`whisper-all` branch)
+## Discovery and compatibility
 
-This branch drops the hidden channel. Everyone you see (nameplates, mouseover,
+There is no hidden channel. Everyone you see (nameplates, mouseover,
 target, focus, chat speakers) is asked directly by a hidden addon whisper,
 same realm or not. Discovery uses GUIDs, because Forever's surname-bearing
 character names can differ between chat and unit frames. Forever names are
@@ -42,9 +42,19 @@ status, the old budget applies (burst 5, then one every 2 s). The same page
 warns of an undocumented **server-side** throttle and possible disconnects if
 too much is sent at once, which is what this branch is for testing.
 
+- **Boss encounters:** the game blocks addon messages
+  (`InChatMessagingLockdown`), so nothing is sent at all: not tried, not
+  counted as refused, not retried. Status updates resume once it ends;
+  players seen during the encounter are asked when next seen.
+- **Zoning:** sends during a loading screen (e.g. the Deeprun Tram) are
+  rejected, so nothing is sent from the loading screen until 3 s after
+  arriving (`LOADING_SCREEN_*`, `PLAYER_ENTERING_WORLD`; held at most 60 s if
+  the end is missed). Probes wait too, so nobody is wrongly marked no-addon;
+  the arrival status update goes out once the pause ends.
 - Any refused send (the result code, e.g. "sending too fast, the game is
-  throttling us") and the server's own throttle notice are **always**
-  reported, debug or not: the first at once, then one summary every 10 s.
+  throttling us") and the server's own throttle notice are reported in debug
+  mode (`/honor debug on`): the first at once, then one summary every 10 s.
+  Players never see them, nor raw Lua errors (also debug only).
 - `/honor rate N` caps whispers at N a second for testing; `/honor rate off`
   removes the cap.
 - `/honor why` (target or hover a player): every condition behind their
@@ -74,6 +84,66 @@ coverage line every 15 s, so you can watch a crowd fill in at real speed.
 - Simulated users are never saved, and the no-addon list can't hide them.
 - `/honor sim off` removes simulated crests and keeps everything learned for
   real. `/honor sim` prints the coverage line.
+
+## Pledge verification (`Verify.lua`)
+
+Was HonorBound running for all the play since the pledge? `/played` is
+counted by the server and keeps going while the addon is off, so disabling
+it, unflagging, reflagging and re-enabling still leaves a gap.
+
+- Record: `since` (/played at the pledge), `seen` (/played as last recorded
+  by the addon, kept current every second from the login /played plus
+  session time), `untracked`.
+- After login, once the save macro is read, the addon asks for /played (its
+  own request isn't printed in chat). No answer: it asks again, 3 tries 30 s
+  apart, then says this session will be checked at the next login. Gap = /played now − `seen`. Gaps of
+  2 min or less are ignored; others add to `untracked`. Only the first
+  /played of a session is assessed.
+- Allowed: the larger of 2 h or 2% of the play since the pledge. Going over
+  **breaks the oath**; a new oath starts a fresh record.
+- Oaths from before this version start verification on first login.
+
+## Saved pledge (`Save.lua`)
+
+The record is kept in a character macro, `HonorBound Save`, because macros
+are stored on Blizzard's servers and addon data isn't:
+
+```
+#HonorBound save data. Do not edit or delete this macro: a changed line is ignored and your pledge may be lost.
+#HB3 l=12;s=40210;p=183342;u=95;n=41;h=4ACF1B72A61A7A37
+```
+
+- `l` level (0 = not sworn: a break is saved too, the macro is never
+  deleted), `s` since, `p` seen, `u` untracked, `n` write counter, `h` a
+  hash of all of it plus the character's GUID (hashed twice, so a one-second
+  change scrambles it). Hand edits and macros copied to another character are
+  rejected; the formula ships with the addon, so this stops casual edits, not
+  a determined cheater, and an old copy of the line stays valid.
+- Written on swear, break and a counted gap, every 2 min while sworn, and at
+  logout; never in combat (it waits). Each write bumps the counter. Addons
+  can only write SavedVariables at logout or /reload (why the Hardcore addon
+  loses whole sessions to crashes); the macro is written during play.
+- At login, once macros are loaded (`UPDATE_MACROS`, or 10 s after login):
+  the higher counter wins, and a tie goes to the macro (this computer may
+  have changed before reading it). The macro's means another computer played
+  since, so its record is adopted (its session isn't a gap); this computer's
+  means a change here never reached the macro (e.g. a break in combat, then a
+  reload), so it's written now. An edited macro is ignored and rewritten; a
+  missing one is recreated. No free character macro slot: a dialog like the
+  pledge prompt asks for one to be cleared (Open macros / Retry / Not now).
+  Not now, once confirmed, turns macro saving off for that character
+  (`char.macroSave = false`): no reads, writes or dialog, and the record is
+  local only. The settings checkbox or `/honor save` turns it back on, which
+  reads the macro first, as at login, then saves.
+- Nothing is written before the macro is read, and the welcome prompt waits
+  for it too: an early swear on a new computer would overwrite the record
+  another computer left.
+- A crash or disconnect loses at most the 2 min since the last write, which
+  the 2 min gap rule ignores.
+- Character macro slots aren't counted against a constant (Forever has two
+  rows more than Classic, and `MAX_CHARACTER_MACROS` may say 18): the save is
+  created and only a failed create counts as full. A character macro is any
+  index past the account macro count.
 
 ## Development and validation
 
