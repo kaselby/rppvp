@@ -1752,6 +1752,15 @@ SlashCmdList.HONORBOUND = function(input)
         end
         return
     end
+    local simFull = (input or ""):lower():match("^%s*simfull%s*(.-)%s*$")
+    if simFull ~= nil then
+        if simFull ~= "on" and simFull ~= "off" then Print("Use /honor simfull on or /honor simfull off.") return end
+        A.simMacrosFull = simFull == "on" or nil
+        Print("Macro saves " .. (A.simMacrosFull and "act as if your character macros are full until you reload."
+            or "work normally again."))
+        if A.simMacrosFull and char.sworn and char.macroSave ~= false then A.MarkSave() A.FlushSave() end
+        return
+    end
     local rateCommand = (input or ""):lower():match("^%s*rate%s*(.-)%s*$")
     if rateCommand ~= nil then
         local value = tonumber(rateCommand)
@@ -1868,6 +1877,7 @@ SlashCmdList.HONORBOUND = function(input)
             {"sim 10", "Pretend 10% of players you ask have the addon (0-100)."},
             {"sim off", "Stop simulating; remove simulated crests."},
             {"rate 5", "Cap whispers at 5 a second (rate off: no cap)."},
+            {"simfull on|off", "Macro saves act as if your character macros are full."},
             {"why", "Explain your target's nameplate crest."},
             {"chatcheck", "Check how this client stores chat lines."},
         } or {

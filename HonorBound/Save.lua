@@ -69,6 +69,7 @@ end
 function A.WriteSave(guid, record)
     if not (CreateMacro and EditMacro and GetMacroIndexByName) then return false, "unsupported" end
     if InCombatLockdown() then return false, "combat" end
+    if A.simMacrosFull then return false, "full" end -- /honor simfull
     local body = A.EncodeSave(guid, record)
     local index = Index()
     if index then

@@ -878,7 +878,7 @@ units.target = nil
 
 -- Scenarios needing a fresh client, each in its own process (tests/scenario.lua).
 local lua = arg and arg[-1] or "luajit"
-local scenarios = {"renounce", "idle_reset", "resurrect_crest", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near", "chat_faction", "save_early_swear", "save_reenable"}
+local scenarios = {"renounce", "idle_reset", "resurrect_crest", "inside", "options", "party", "remember", "options_broken", "verify_track", "verify_gap", "verify_fail", "verify_rules", "verify_noanswer", "save_restore", "save_crosspc", "save_broken", "save_pending", "save_altered", "save_flow", "save_full", "save_forever_slots", "party_answer", "inside_near", "chat_faction", "save_early_swear", "save_reenable", "save_simfull"}
 for _, name in ipairs(scenarios) do
     local ok = os.execute(lua .. " tests/scenario.lua " .. name .. " >/dev/null")
     check(ok == true or ok == 0, "scenario " .. name .. " (luajit tests/scenario.lua " .. name .. ")")
