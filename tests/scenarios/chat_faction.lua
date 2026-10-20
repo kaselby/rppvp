@@ -1,4 +1,4 @@
--- Chat only trusts and whispers our own faction (from Sol's 0.6.0 review):
+-- Chat only trusts and whispers our own faction:
 -- the saved list is account-wide, so a Horde alt's knowledge mustn't give
 -- an Alliance character an enemy crest or a whisper to the other faction.
 units.player.faction = 'Alliance'

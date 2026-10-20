@@ -1,5 +1,5 @@
 -- Our dungeon keeps crests for players near us (in it with us), not for
--- party members outside (from Sol's 0.6.0 review).
+-- party members outside.
 setup()
 inGuild = false
 group = true

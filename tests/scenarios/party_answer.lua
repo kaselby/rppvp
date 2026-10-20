@@ -1,5 +1,5 @@
--- A whisper out to someone is answered by their status over the party (from
--- Sol's 0.6.0 review): no timeout, no false "no addon".
+-- A whisper out to someone is answered by their status over the party: no
+-- timeout, no false "no addon".
 setup()
 inGuild = false
 local g = 'Player-70-AA1002'
