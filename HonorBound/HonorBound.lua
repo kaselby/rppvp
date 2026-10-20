@@ -1086,8 +1086,9 @@ function A.SyncSave()
     A.saveSynced = true
     local saved, why = A.ReadSave(myGUID)
     local mine = char.saveSeq or 0
-    if saved and saved.n > mine then
-        -- Newer than this computer's copy: another computer played since.
+    -- Newer than this computer's copy: another computer played since. A tie
+    -- goes to the macro too: this computer may have changed before reading it.
+    if saved and saved.n >= mine then
         char.saveSeq = saved.n
         if saved.level == 0 then
             if char.sworn then
@@ -1115,7 +1116,7 @@ function A.SyncSave()
             Print("The " .. A.SAVE_NAME .. " macro was edited, so it was ignored"
                 .. (char.sworn ~= nil and " and rewritten from this computer." or "."))
         end
-        -- Missing, edited, older or the same: this computer's copy stands.
+        -- Missing, edited or older: this computer's copy stands.
         if char.sworn ~= nil and (not saved or mine > saved.n) then A.MarkSave() end
     end
     UpdatePrompt()

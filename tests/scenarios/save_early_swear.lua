@@ -1,6 +1,7 @@
 -- A new computer, sworn on another: swearing before the macro is read must
 -- not overwrite it, and the macro's older level comes back.
-local body = A.EncodeSave(me, {level = 12, since = 1000, seen = 5000, untracked = 0, n = 50})
+-- n = 1: the same counter the early swear reaches here, so a tie goes to the macro.
+local body = A.EncodeSave(me, {level = 12, since = 1000, seen = 5000, untracked = 0, n = 1})
 macros[121] = {name = A.SAVE_NAME, perCharacter = true, body = body}
 event("PLAYER_LOGIN")
 assert(not prompt.shown, "no welcome before the macro is read")
