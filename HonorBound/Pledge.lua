@@ -1,4 +1,3 @@
--- Honor-system extension. Original v2 status messages remain unchanged.
 local _, A = ...
 
 local function valid(level)
@@ -6,8 +5,7 @@ local function valid(level)
         and level == math.floor(level)
 end
 
--- Optional companion snapshot: zero means no active pledge to advertise.
--- Old clients ignore this message. No profile text or history is transmitted.
+-- "P|1|<GUID>|<level sworn since, 0 none>|<version>"
 function A.EncodePledge(guid, level)
     return ("P|1|%s|%d|%s"):format(guid, valid(level) and level or 0, A.VERSION)
 end
@@ -22,8 +20,7 @@ function A.DecodePledge(message)
         pledgedSinceLevel = level ~= 0 and level or nil}
 end
 
--- Share the existing bounded-lifetime peer cache. Legacy heartbeats must not
--- extend the lifetime of pledge metadata after a client downgrades.
+-- An S message keeps a fresh pledge level but never extends its lifetime.
 function A.MergePledgePeer(previous, incoming, now, isPledge)
     incoming.seen = now
     if isPledge and incoming.sworn then

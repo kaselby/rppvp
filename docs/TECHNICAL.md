@@ -2,9 +2,9 @@
 
 For contributors. Player docs are in the [README](../README.md).
 
-## Discovery and compatibility (`whisper-all` branch)
+## Discovery and compatibility
 
-This branch drops the hidden channel. Everyone you see (nameplates, mouseover,
+There is no hidden channel. Everyone you see (nameplates, mouseover,
 target, focus, chat speakers) is asked directly by a hidden addon whisper,
 same realm or not. Discovery uses GUIDs, because Forever's surname-bearing
 character names can differ between chat and unit frames. Forever names are
@@ -124,15 +124,26 @@ are stored on Blizzard's servers and addon data isn't:
   can only write SavedVariables at logout or /reload (why the Hardcore addon
   loses whole sessions to crashes); the macro is written during play.
 - At login, once macros are loaded (`UPDATE_MACROS`, or 10 s after login):
-  the higher counter wins. The macro's means another computer played since,
-  so its record is adopted (its session isn't a gap); this computer's means a
-  change here never reached the macro (e.g. a break in combat, then a
+  the higher counter wins, and a tie goes to the macro (this computer may
+  have changed before reading it). The macro's means another computer played
+  since, so its record is adopted (its session isn't a gap); this computer's
+  means a change here never reached the macro (e.g. a break in combat, then a
   reload), so it's written now. An edited macro is ignored and rewritten; a
   missing one is recreated. No free character macro slot: a dialog like the
-  pledge prompt asks for one to be cleared (Open macros / Retry / Not now);
-  meanwhile the record is local only. `/honor save` tries again.
+  pledge prompt asks for one to be cleared (Open macros / Retry / Not now).
+  Not now, once confirmed, turns macro saving off for that character
+  (`char.macroSave = false`): no reads, writes or dialog, and the record is
+  local only. The settings checkbox or `/honor save` turns it back on, which
+  reads the macro first, as at login, then saves.
+- Nothing is written before the macro is read, and the welcome prompt waits
+  for it too: an early swear on a new computer would overwrite the record
+  another computer left.
 - A crash or disconnect loses at most the 2 min since the last write, which
   the 2 min gap rule ignores.
+- Character macro slots aren't counted against a constant (Forever has two
+  rows more than Classic, and `MAX_CHARACTER_MACROS` may say 18): the save is
+  created and only a failed create counts as full. A character macro is any
+  index past the account macro count.
 
 ## Development and validation
 

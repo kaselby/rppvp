@@ -16,7 +16,9 @@ game.
   key or click flags you again. Keep playing and you won't notice.
 - **Gives you 5 minutes.** If you stay unflagged for 5 minutes, your oath
   breaks and your crest is gone. The clock waits while you're inside a
-  dungeon or away from the keyboard.
+  dungeon, doesn't start until you do something (move, turn, cast, fight
+  or loot), and pauses after 30 seconds of doing nothing, so being
+  unflagged while you're away from the keyboard costs nothing.
 - **Shows the crest.** Sworn players wear a blue (Alliance) or red (Horde)
   crest in place of the usual PvP icon (on portraits and party frames), on
   nameplates, and in chat. Hover it
@@ -77,6 +79,8 @@ the popup waits after a dungeon.
 - Your pledge and its verification are saved in a character macro called
   **HonorBound Save**, so they follow your character to other computers. Don't
   edit or delete it: an edited macro is ignored, and if it's gone your pledge
-  only lives on this computer until HonorBound recreates it.
+  only lives on this computer until HonorBound recreates it. If your
+  character macros are full and you'd rather not free one, choose Not now
+  and confirm; turn it back on in the settings or with `/honor save`.
 - Crests work across realms, but not across factions.
 - Made by Moderately Aware, Krylea, Jmcq and Raffoo. Found a bug? [Open an issue](https://github.com/kaselby/rppvp/issues).

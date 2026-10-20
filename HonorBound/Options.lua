@@ -1,8 +1,4 @@
--- The settings page under Options > AddOns > HonorBound. Every setting here
--- is also a slash command; both read and write the same saved values.
--- Uses the game's Settings API (Blizzard_Settings_Shared, same on 12.1.5 and
--- Classic Era); on a client without it there's no page and the slash
--- commands still work.
+-- Options > AddOns > HonorBound. Every setting is also a slash command.
 local _, A = ...
 
 local POPUP_MIN, POPUP_MAX, POPUP_DEFAULT = 10, 120, 30
@@ -16,8 +12,9 @@ local function Seconds(value)
 end
 A.Seconds = Seconds
 
--- db: the saved settings. changed(key): called after the page changes one.
-function A.InstallOptions(db, changed)
+-- db: the saved settings; char: this character's. changed(key): called after
+-- the page changes one.
+function A.InstallOptions(db, char, changed)
     if not (Settings and Settings.RegisterVerticalLayoutCategory and Settings.RegisterProxySetting
         and Settings.CreateCheckbox and Settings.CreateSlider and Settings.RegisterAddOnCategory) then
         return
@@ -50,6 +47,10 @@ function A.InstallOptions(db, changed)
         function() return db.chatIcons ~= false end,
         function(value) db.chatIcons = value and true or false end,
         "Show the crest beside sworn players' names in chat.")
+    Checkbox("macroSave", "Save your pledge in a character macro", true,
+        function() return char.macroSave ~= false end,
+        function(value) A.SetMacroSave(value) end,
+        "Your pledge follows this character to other computers. Uses one character macro slot. This character only.")
     Slider("scale", "Crest size", 1, 0.6, 2, 0.1,
         function(value) return ("%.1f"):format(value) end,
         function() return db.scale end,
