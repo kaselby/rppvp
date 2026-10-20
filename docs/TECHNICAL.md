@@ -135,6 +135,8 @@ are stored on Blizzard's servers and addon data isn't:
   (`char.macroSave = false`): no reads, writes or dialog, and the record is
   local only. The settings checkbox or `/honor save` turns it back on, which
   reads the macro first, as at login, then saves.
+- `/honor simfull on` makes every macro save fail as full until a reload or
+  `/honor simfull off`, to try the dialog without filling the slots.
 - Nothing is written before the macro is read, and the welcome prompt waits
   for it too: an early swear on a new computer would overwrite the record
   another computer left.
