@@ -98,6 +98,8 @@ function GetMacroIndexByName(name)
     return 0
 end
 function GetMacroInfo(index) local m = macros[index] if m then return m.name, m.icon, m.body end end
+StaticPopupDialogs, shownPopup = {}, nil
+function StaticPopup_Show(name) shownPopup = name end
 function CreateMacro(name, icon, body, perCharacter)
     local _, character = GetNumMacros()
     if character >= CHARACTER_SLOTS then error("Too many macros") end

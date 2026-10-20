@@ -974,6 +974,7 @@ end
 -- At login the higher counter, the macro's or this computer's, wins.
 A.SAVE_EVERY = 120 -- a crash loses at most this, within VERIFY_IGNORE
 function A.MarkSave()
+    if char.macroSave == false then return end
     char.saveSeq = (char.saveSeq or 0) + 1
     A.saveDirty, A.savedAt = true, GetTime()
 end
@@ -1007,8 +1008,18 @@ function A.FlushSave()
         end
     end
 end
+-- Macro saving on (saving now) or off, for this character. While it was off
+-- the macro wasn't read, so turning it on reads it first.
+function A.SetMacroSave(on)
+    if not on then char.macroSave, A.saveDirty = false, nil return end
+    local was = char.macroSave
+    char.macroSave = nil
+    if was == false and A.saveSynced then A.saveSynced = nil A.SyncSave() end
+    if char.sworn ~= nil then A.MarkSave() A.FlushSave() end
+end
 -- No free character macro slot: ask for one to be cleared. Shown on every
--- failed save while sworn, so it returns with each SAVE_EVERY save.
+-- failed save while sworn, so it returns with each SAVE_EVERY save, until
+-- Not now (confirmed) turns macro saving off.
 function A.ShowMacrosFull()
     local f = A.macrosFull
     if not f then
@@ -1072,8 +1083,21 @@ function A.ShowMacrosFull()
         later:SetText("Not now")
         later:SetScript("OnClick", function()
             f:Hide()
-            Print("Your pledge stays on this computer only until a character macro slot is free. /honor save tries again.")
+            StaticPopup_Show("HONORBOUND_STOP_MACRO_SAVE")
         end)
+        f.later = later
+        StaticPopupDialogs.HONORBOUND_STOP_MACRO_SAVE = {
+            text = "Stop saving your pledge in a macro on this character?\n\nIt will be kept on this computer only:"
+                .. " playing on another computer, or losing your addon settings, starts it over. Turn it back on"
+                .. " in Options > AddOns > HonorBound or with /honor save.",
+            button1 = "Stop saving", button2 = "Cancel",
+            OnAccept = function()
+                A.SetMacroSave(false)
+                Print("Your pledge isn't saved in a macro on this character any more. /honor save turns it back on.")
+            end,
+            OnCancel = function(_, _, reason) if reason == "clicked" then A.ShowMacrosFull() end end,
+            timeout = 0, whileDead = true, hideOnEscape = true,
+        }
         A.macrosFull = f
     end
     f.icon:SetTexture(MEDIA .. "Crest" .. Faction("player") .. ".tga")
@@ -1084,7 +1108,8 @@ end
 function A.SyncSave()
     if not myGUID or A.saveSynced then return end
     A.saveSynced = true
-    local saved, why = A.ReadSave(myGUID)
+    local saved, why
+    if char.macroSave ~= false then saved, why = A.ReadSave(myGUID) end
     local mine = char.saveSeq or 0
     -- Newer than this computer's copy: another computer played since. A tie
     -- goes to the macro too: this computer may have changed before reading it.
@@ -1717,9 +1742,10 @@ SlashCmdList.HONORBOUND = function(input)
     end
     if (input or ""):lower():match("^%s*save%s*$") then
         if char.sworn == nil then Print("Nothing to save: you haven't sworn on this character.") return end
-        A.MarkSave()
-        A.FlushSave()
-        if not A.saveDirty and not (A.macrosFull and A.macrosFull:IsShown()) then
+        A.SetMacroSave(true)
+        if not A.saveSynced then
+            Print("Your pledge will be saved once your macros have loaded.")
+        elseif not A.saveDirty and not (A.macrosFull and A.macrosFull:IsShown()) then
             Print("Your pledge is saved in the " .. A.SAVE_NAME .. " macro.")
         elseif A.saveDirty then
             Print("You're in combat; your pledge will be saved when it ends.")
@@ -1849,7 +1875,7 @@ SlashCmdList.HONORBOUND = function(input)
             {"swear", "Take the oath."},
             {"renounce", "Give up the oath (asks to confirm)."},
             {"options", "Open the settings page."},
-            {"save", "Save your pledge to its macro again."},
+            {"save", "Save your pledge to its macro (turns macro saving back on)."},
             {"autoflag on|off", "Reflag on your next action bar key."},
             {"plates", "Show or hide crests on nameplates."},
             {"chat on|off", "Show or hide crests in chat."},
@@ -1920,7 +1946,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             GameTooltip:HookScript("OnTooltipSetUnit", OnTooltip)
         end
         -- If the Settings API differs, lose the page, not the addon.
-        local built, category = pcall(A.InstallOptions, db, function(key)
+        local built, category = pcall(A.InstallOptions, db, char, function(key)
             if key == "autoflag" then
                 if db.autoReflag == false then DisarmReflag() end
                 UpdatePrompt()
