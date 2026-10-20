@@ -986,7 +986,9 @@ function A.LocalSave()
         untracked = v and v.untracked or 0, n = char.saveSeq or 0}
 end
 function A.FlushSave()
-    if not A.saveDirty or not myGUID then return end
+    -- Not before the macro is read: writing first would overwrite the record
+    -- another computer left. The write waits for SyncSave.
+    if not A.saveDirty or not myGUID or not A.saveSynced then return end
     local record = A.LocalSave()
     if not record then A.saveDirty = nil return end
     local ok, why = A.WriteSave(myGUID, record)
@@ -1116,6 +1118,7 @@ function A.SyncSave()
         -- Missing, edited, older or the same: this computer's copy stands.
         if char.sworn ~= nil and (not saved or mine > saved.n) then A.MarkSave() end
     end
+    UpdatePrompt()
     A.RequestPlayed()
 end
 
@@ -1244,7 +1247,7 @@ UpdatePrompt = function()
         elseif char.joining then
             Swear()
             SetPromptShown(false)
-        elseif char.sworn == nil and not char.declined then
+        elseif char.sworn == nil and not char.declined and A.saveSynced then
             prompt.text:SetText("Swear to RP-PvP on this character? You'll stay flagged for good, and the community will see your crest.")
             SetFlagButton(false)
             prompt.swear:Show()
@@ -1257,7 +1260,8 @@ UpdatePrompt = function()
     end
     prompt.swear:Hide()
 
-    local welcome = char.sworn == nil and not char.declined
+    -- The welcome waits for the save macro, which may already hold an oath.
+    local welcome = char.sworn == nil and not char.declined and A.saveSynced
     if not char.sworn and not welcome and not char.joining then
         DisarmReflag()
         SetPromptShown(false)
